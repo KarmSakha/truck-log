@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+// Same-origin in production (Django serves the SPA). For a split
+// deployment, set VITE_API_URL to the API origin. In dev, vite proxies /api.
+const API_BASE = import.meta.env.VITE_API_URL || "";
 
 export async function planTrip(input) {
   const r = await fetch(`${API_BASE}/api/trips/`, {
