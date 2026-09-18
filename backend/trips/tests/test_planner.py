@@ -5,7 +5,7 @@ from datetime import date
 from django.test import SimpleTestCase
 
 from trips.planner.core import (
-    DAY, STATUS_D, STATUS_OFF, STATUS_ON, STATUS_SB, plan_trip,
+    DAY, STATUS_D, STATUS_OFF, STATUS_ON, STATUS_SB, ceil_quarter, plan_trip,
 )
 from trips.planner.days import build_day_logs
 
@@ -59,6 +59,16 @@ def check_no_violations(test, plan):
         test.assertLessEqual(drive_min, 11 * 60, "11h exceeded")
         test.assertLessEqual(span, 14 * 60 + 60 + 30,
                              "window too long")  # window incl. stops
+    # no more than 8h driving without 30 consecutive non-driving minutes
+    since_break, idle = 0, 0
+    for e in evs:
+        if e.status == STATUS_D:
+            since_break, idle = since_break + e.duration, 0
+            test.assertLessEqual(since_break, 8 * 60, "30-min break missed")
+        else:
+            idle += e.duration
+            if idle >= 30:
+                since_break = 0
 
 
 def check_logs(test, logs):
@@ -96,6 +106,25 @@ class PlannerBasicsTests(SimpleTestCase):
                     for s in logs[0]["segments"] if s["status"] == STATUS_D)
         self.assertEqual(d_min, 75)
 
+    def test_zero_length_first_leg(self):
+        # Driver already at the pickup: leg 0 is exactly 0 mi / 0 min.
+        lm, lt = legs((0.0, 0), (300, 330))
+        plan = plan_trip(lm, lt, 0)
+        check_no_violations(self, plan)
+        kinds = [e.kind for e in plan.events]
+        deduped = [k for i, k in enumerate(kinds)
+                   if i == 0 or k != kinds[i - 1]]
+        self.assertEqual(deduped, [
+            "off_duty_start", "pre_trip", "pickup", "drive",
+            "dropoff", "post_trip", "off_duty_end", "sleeper_end",
+        ])
+        pickup = next(s for s in plan.stops if s.type == "pickup")
+        self.assertEqual(pickup.start, 360 + 15)  # right after pre-trip
+        self.assertEqual(pickup.route_mile, 0.0)
+        self.assertAlmostEqual(plan.total_driving_miles, 300, places=6)
+        self.assertEqual(plan.total_driving_minutes, 330)
+        check_logs(self, build_day_logs(plan, date(2026, 9, 19), 0))
+
     def test_pickup_dropoff_one_hour_on(self):
         lm, lt = legs((60, 65), (60, 65))
         plan = plan_trip(lm, lt, 0)
@@ -122,6 +151,21 @@ class BreakAndWindowTests(SimpleTestCase):
         # remark exists for the break
         acts = [r["activity"] for l in logs for r in l["remarks"]]
         self.assertIn("30-min break", acts)
+
+    def test_pickup_hour_resets_break_clock(self):
+        # 4h drive, 1h pickup (>= 30 min non-driving), 5h drive: no break.
+        lm, lt = legs((4 * MPH, 4 * 60), (5 * MPH, 5 * 60))
+        plan = plan_trip(lm, lt, 0)
+        self.assertEqual([e for e in plan.events if e.kind == "break"], [])
+        check_no_violations(self, plan)
+
+    def test_single_long_leg_gets_exactly_one_break(self):
+        lm, lt = legs((8.5 * MPH, 8 * 60 + 30))
+        plan = plan_trip(lm, lt, 0)
+        breaks = [e for e in plan.events if e.kind == "break"]
+        self.assertEqual(len(breaks), 1)
+        self.assertEqual(breaks[0].duration, 30)
+        check_no_violations(self, plan)
 
     def test_11h_drive_forces_10h_rest(self):
         # 13h of driving needs a rest; none allowed past 11h in a window
@@ -209,6 +253,26 @@ class FuelAndCycleTests(SimpleTestCase):
         logs = build_day_logs(plan, date(2026, 9, 19), 70 * 60)
         check_logs(self, logs)
 
+    def test_ceil_quarter(self):
+        self.assertEqual(ceil_quarter(0), 0)
+        self.assertEqual(ceil_quarter(65.0 * 60), 3900)
+        self.assertEqual(ceil_quarter(65.1 * 60), 3915)   # 65.1h -> 65.25h
+        self.assertEqual(ceil_quarter(37.3 * 60), 2250)   # 37.3h -> 37.5h
+        self.assertEqual(ceil_quarter(1), 15)
+        self.assertEqual(ceil_quarter(70 * 60), 70 * 60)
+
+    def test_fractional_cycle_hours_never_exceed_70(self):
+        # 65.1h used: rounding to the nearest 15 min (65.0h) would let the
+        # plan drive to 70.1 real hours before the 34h restart.
+        lm, lt = legs((30, 30), (600, 11 * 60))
+        plan = plan_trip(lm, lt, cycle_used_hours=65.1)
+        restart = next(e for e in plan.events if e.kind == "restart_off")
+        on_before = sum(e.duration for e in plan.events
+                        if e.status in (STATUS_D, STATUS_ON)
+                        and e.end <= restart.start)
+        self.assertLessEqual(on_before, 70 * 60 - 65.1 * 60)
+        check_no_violations(self, plan)
+
     def test_cycle_never_exceeded_by_on_duty(self):
         lm, lt = legs((200, 4 * 60), (900, 16 * 60))
         plan = plan_trip(lm, lt, cycle_used_hours=40)
@@ -274,7 +338,7 @@ class GoldenFixtureTest(SimpleTestCase):
 
 
 class RecapTests(SimpleTestCase):
-    """70/8 recap: A = last 7 days, B = 70 - A, C = last 5 days (paper form)."""
+    """70/8 recap: A = last 7 days, B = 70 - A, C = last 8 days."""
 
     def test_recap_after_restart_counts_only_post_restart_hours(self):
         lm, lt = legs((30, 30), (2400, 44 * 60))
@@ -286,7 +350,7 @@ class RecapTests(SimpleTestCase):
             self.assertGreaterEqual(r["a"], 0)
             self.assertLessEqual(r["a"], 70)
             self.assertAlmostEqual(r["b"], 70 - r["a"], places=2)
-            self.assertLessEqual(r["c"], r["a"])
+            self.assertGreaterEqual(r["c"], r["a"])
             day_end = (d + 1) * DAY
             if restart_end <= day_end:
                 since = sum(
@@ -295,21 +359,25 @@ class RecapTests(SimpleTestCase):
                 )
                 self.assertAlmostEqual(r["a"], since / 60, places=2)
 
-    def test_recap_c_is_a_five_day_window(self):
+    def test_recap_c_is_an_eight_day_window(self):
         from trips.planner.core import Event, PlanResult
 
-        # 6 days, 2h on duty each morning, 10h of prior cycle hours.
+        # 10 days, 2h on duty each morning, 10h of prior cycle hours.
         evs = []
-        for d in range(6):
+        for d in range(10):
             base = d * DAY
             evs += [Event(base, base + 360, STATUS_OFF, "off"),
                     Event(base + 360, base + 480, STATUS_ON, "on"),
                     Event(base + 480, base + DAY, STATUS_OFF, "off")]
-        plan = PlanResult(events=evs, stops=[], days=6)
+        plan = PlanResult(events=evs, stops=[], days=10)
         logs = build_day_logs(plan, date(2026, 9, 19), 10 * 60)
         # day 4 (index 3): both windows reach before the trip -> prior counts
+        self.assertEqual(logs[3]["recap"]["a"], 10 + 4 * 2)
         self.assertEqual(logs[3]["recap"]["c"], 10 + 4 * 2)
-        # day 6 (index 5): C covers trip days 2-6 only, A still reaches back
-        self.assertEqual(logs[5]["recap"]["c"], 5 * 2)
-        self.assertEqual(logs[5]["recap"]["a"], 10 + 6 * 2)
-        self.assertEqual(logs[5]["recap"]["b"], 70 - 22)
+        # day 7 (index 6): A is trip days 1-7 only, C still reaches back
+        self.assertEqual(logs[6]["recap"]["a"], 7 * 2)
+        self.assertEqual(logs[6]["recap"]["c"], 10 + 7 * 2)
+        # day 10 (index 9): C = last 8 days, A = last 7, B = 70 - A
+        self.assertEqual(logs[9]["recap"]["c"], 8 * 2)
+        self.assertEqual(logs[9]["recap"]["a"], 7 * 2)
+        self.assertEqual(logs[9]["recap"]["b"], 70 - 14)

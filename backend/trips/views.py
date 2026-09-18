@@ -1,5 +1,6 @@
 import json
 import math
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, available_timezones
 
@@ -8,7 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from .models import Trip
-from .planner.core import plan_trip, quantize_minutes
+from .planner.core import DAY, STEP, ceil_quarter, plan_trip, quantize_minutes
 from .planner.days import build_day_logs
 from .services import geocode, routing
 
@@ -18,6 +19,10 @@ US_TIMEZONES = {
     "Pacific/Honolulu",
 }
 
+LOCATION_MAX = 200
+META_MAX = 80
+START_TIME_RE = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)", re.ASCII)
+
 
 def _err(status, field, msg):
     return JsonResponse({"error": msg, "field": field}, status=status)
@@ -26,13 +31,15 @@ def _err(status, field, msg):
 @require_GET
 def geocode_search(request):
     """Typeahead proxy: GET /api/geocode/?q=..."""
-    q = (request.GET.get("q") or "").strip()
+    q = (request.GET.get("q") or "").strip()[:LOCATION_MAX]
     if len(q) < 3:
         return JsonResponse({"results": []})
     try:
         return JsonResponse({"results": geocode.autocomplete(q)})
     except Exception:
-        return JsonResponse({"results": []})
+        # 502, not an empty 200, so the UI can tell "failed" from "no matches"
+        return JsonResponse(
+            {"results": [], "error": "Place search is unavailable"}, status=502)
 
 
 @require_GET
@@ -49,18 +56,28 @@ def trip_detail(request, trip_id):
 def trip_create(request):
     try:
         body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return _err(400, "body", "Invalid JSON")
+    if not isinstance(body, dict):
+        return _err(400, "body", "Request body must be a JSON object")
 
-    current_s = (body.get("current_location") or "").strip()
-    pickup_s = (body.get("pickup_location") or "").strip()
-    dropoff_s = (body.get("dropoff_location") or "").strip()
-    if not current_s:
-        return _err(400, "current_location", "Current location is required")
-    if not pickup_s:
-        return _err(400, "pickup_location", "Pickup location is required")
-    if not dropoff_s:
-        return _err(400, "dropoff_location", "Dropoff location is required")
+    locs = {}
+    for fld, label in (("current_location", "Current location"),
+                       ("pickup_location", "Pickup location"),
+                       ("dropoff_location", "Dropoff location")):
+        v = body.get(fld)
+        if v is not None and not isinstance(v, str):
+            return _err(400, fld, f"{label} must be text")
+        v = (v or "").strip()
+        if not v:
+            return _err(400, fld, f"{label} is required")
+        if len(v) > LOCATION_MAX:
+            return _err(400, fld,
+                        f"{label} is too long (max {LOCATION_MAX} characters)")
+        locs[fld] = v
+    current_s = locs["current_location"]
+    pickup_s = locs["pickup_location"]
+    dropoff_s = locs["dropoff_location"]
 
     try:
         cycle_used = float(body.get("current_cycle_used_hours", 0))
@@ -70,16 +87,21 @@ def trip_create(request):
         return _err(400, "current_cycle_used_hours",
                     "Cycle hours must be between 0 and 70")
 
+    start_s = body.get("start_time")
     start_minute = 360
-    if body.get("start_time"):
-        try:
-            hh, mm = str(body["start_time"]).split(":")[:2]
-            start_minute = quantize_minutes(int(hh) * 60 + int(mm))
-        except (ValueError, IndexError):
-            return _err(400, "start_time", "Start time must be HH:MM")
+    if start_s not in (None, ""):
+        m = (START_TIME_RE.fullmatch(start_s.strip())
+             if isinstance(start_s, str) else None)
+        if not m:
+            return _err(400, "start_time",
+                        "Start time must be HH:MM (00:00–23:59)")
+        # 15-min grid; clamp so e.g. 23:53 stays on day 0 (23:45, not 24:00)
+        start_minute = min(quantize_minutes(int(m[1]) * 60 + int(m[2])),
+                           DAY - STEP)
+        start_s = start_s.strip()
 
     tz_name = body.get("timezone") or "America/Chicago"
-    if tz_name not in available_timezones():
+    if not isinstance(tz_name, str) or tz_name not in available_timezones():
         return _err(400, "timezone", "Unknown time zone")
 
     # ---- geocode the three endpoints -------------------------------------
@@ -97,8 +119,11 @@ def trip_create(request):
                     "Can't find that place — try City, ST")
 
     pts = [(p.lat, p.lng) for p in (current, pickup, dropoff)]
-    if _mi(pts[0], pts[1]) < 0.5 or _mi(pts[1], pts[2]) < 0.5:
-        return _err(400, "pickup_location", "Need three different points")
+    if _mi(pts[1], pts[2]) < 0.5:
+        return _err(400, "dropoff_location",
+                    "Pickup and dropoff are the same place")
+    # Driver already at the pickup: no deadhead leg to drive.
+    at_pickup = _mi(pts[0], pts[1]) < 0.5
 
     # ---- route -------------------------------------------------------------
     try:
@@ -109,25 +134,34 @@ def trip_create(request):
     cum = routing.cumulative_distances(route.geometry)
     total_poly_miles = cum[-1]
 
+    leg_miles = [leg.miles for leg in route.legs]
+    leg_minutes = [leg.minutes for leg in route.legs]
+    skipped_miles = 0.0
+    if at_pickup:
+        # Exactly 0 (quantize_minutes would round a stub leg up to 0:15).
+        skipped_miles, leg_miles[0], leg_minutes[0] = leg_miles[0], 0.0, 0
+
     # Scale route_mile (driving miles per planner) to polyline miles: the
-    # planner's route_mile tracks OSRM leg miles, so map by fraction of the
-    # total OSRM distance.
+    # planner's route_mile tracks OSRM leg miles (minus any skipped
+    # current->pickup stub), so map by fraction of the total OSRM distance.
     def mile_to_lnglat(route_mile):
-        frac = 0.0 if route.total_miles <= 0 else route_mile / route.total_miles
+        frac = (0.0 if route.total_miles <= 0
+                else (route_mile + skipped_miles) / route.total_miles)
         return routing.position_at_mile(
             route.geometry, cum, frac * total_poly_miles)
 
     # ---- plan ---------------------------------------------------------------
     plan = plan_trip(
-        leg_miles=[leg.miles for leg in route.legs],
-        leg_minutes=[leg.minutes for leg in route.legs],
+        leg_miles=leg_miles,
+        leg_minutes=leg_minutes,
         cycle_used_hours=cycle_used,
         start_minute=start_minute,
     )
 
     # ---- enrich stops: position + city/state --------------------------------
     endpoints = [current, pickup, dropoff]
-    endpoint_miles = [0.0, route.legs[0].miles, route.total_miles]
+    endpoint_miles = [0.0, leg_miles[0], sum(leg_miles)]
+    own_endpoint = {"pickup": pickup, "dropoff": dropoff}
 
     def nearest_endpoint_city(route_mile):
         i = min(range(3), key=lambda j: abs(endpoint_miles[j] - route_mile))
@@ -143,11 +177,12 @@ def trip_create(request):
     for s in plan.stops:
         lnglat = mile_to_lnglat(s.route_mile)
         # endpoints get their geocoded city for free; mid-route stops reverse
-        place = None
-        if min(abs(s.route_mile - em) for em in endpoint_miles) < 3.0:
-            place = nearest_endpoint_city(s.route_mile)
-        else:
-            place = geocode.reverse(lnglat[1], lnglat[0])
+        place = own_endpoint.get(s.type)
+        if place is None:
+            if min(abs(s.route_mile - em) for em in endpoint_miles) < 3.0:
+                place = nearest_endpoint_city(s.route_mile)
+            else:
+                place = geocode.reverse(lnglat[1], lnglat[0])
         if place is None:
             place = nearest_endpoint_city(s.route_mile)
         s.city, s.state = place.city, place.state
@@ -162,8 +197,7 @@ def trip_create(request):
     # ---- day logs ------------------------------------------------------------
     tz = ZoneInfo(tz_name)
     start_date = datetime.now(tz).date()
-    logs = build_day_logs(plan, start_date,
-                          quantize_minutes(cycle_used * 60.0))
+    logs = build_day_logs(plan, start_date, ceil_quarter(cycle_used * 60.0))
 
     # ISO-ish local timestamps for stop labels
     day0 = datetime.combine(start_date, datetime.min.time(), tzinfo=tz)
@@ -183,24 +217,24 @@ def trip_create(request):
             "current_location": current_s, "pickup_location": pickup_s,
             "dropoff_location": dropoff_s,
             "current_cycle_used_hours": cycle_used,
-            "start_time": body.get("start_time") or "06:00",
+            "start_time": start_s or "06:00",
             "timezone": tz_name,
         },
         "meta": {
-            "carrier": body.get("carrier") or "Demo Carrier",
-            "shipper": body.get("shipper") or "N/A",
-            "commodity": body.get("commodity") or "N/A",
-            "manifest": body.get("manifest") or "N/A",
-            "tractor": body.get("tractor") or "N/A",
-            "trailer": body.get("trailer") or "N/A",
-            "driver": body.get("driver") or "N/A",
-            "co_driver": body.get("co_driver") or "N/A",
-            "home_terminal": body.get("home_terminal") or current.display,
-            "main_office": body.get("main_office") or "N/A",
+            "carrier": _meta(body, "carrier") or "Demo Carrier",
+            "shipper": _meta(body, "shipper") or "N/A",
+            "commodity": _meta(body, "commodity") or "N/A",
+            "manifest": _meta(body, "manifest") or "N/A",
+            "tractor": _meta(body, "tractor") or "N/A",
+            "trailer": _meta(body, "trailer") or "N/A",
+            "driver": _meta(body, "driver") or "N/A",
+            "co_driver": _meta(body, "co_driver") or "N/A",
+            "home_terminal": _meta(body, "home_terminal") or current.display,
+            "main_office": _meta(body, "main_office") or "N/A",
             "timezone": tz_name,
         },
         "summary": {
-            "total_miles": int(round(route.total_miles)),
+            "total_miles": int(round(route.total_miles - skipped_miles)),
             "total_driving_minutes": plan.total_driving_minutes,
             "days": plan.days,
             "stops": len(stops_out),
@@ -242,6 +276,12 @@ def trip_create(request):
     trip.result = result
     trip.save(update_fields=["result"])
     return JsonResponse(result)
+
+
+def _meta(body, key):
+    """Optional free-text field: non-strings count as missing; trim + cap."""
+    v = body.get(key)
+    return v.strip()[:META_MAX] if isinstance(v, str) else ""
 
 
 def _mi(a, b):

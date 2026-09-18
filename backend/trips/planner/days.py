@@ -108,8 +108,9 @@ def build_day_logs(plan, start_date, cycle_used_minutes):
             prior = cycle_used_minutes if start < 0 else 0
             return prior + _on_duty_between(plan, start, day_end)
 
+        # A = last 7 days incl. today, B = 70 - A, C = last 8 days incl. today
         a = round(window_on_duty(7) / 60.0, 2)
-        c = round(window_on_duty(5) / 60.0, 2)
+        c = round(window_on_duty(8) / 60.0, 2)
         on_today = round(_on_duty_between(plan, day_start, day_end) / 60.0, 2)
 
         # from/to: city of the stop containing day bounds (fallback: ends)

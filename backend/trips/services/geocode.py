@@ -1,11 +1,17 @@
 """Geocoding: Nominatim primary, Photon (komoot) fallback.
 
-Nominatim usage policy: <=1 req/s, identifying UA + Referer. Results are
-cached in the DB so repeat demo trips don't re-hit the services.
+Nominatim usage policy: <=1 req/s, identifying UA + Referer, and no
+autocomplete / search-as-you-type, so typeahead goes to Photon only.
+Nominatim is used for the single forward geocode on submit and for
+reverse lookups. Results are cached in the DB so repeat demo trips and
+repeat keystrokes don't re-hit the services.
 """
 
 from __future__ import annotations
 
+import fcntl
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 
@@ -36,19 +42,40 @@ _US_STATE_ABBR = {
 
 PHOTON_URL = "https://photon.komoot.io"
 
-_last_call = [0.0]
+# (lock name, min seconds between calls) per host, shared by all workers.
+NOMINATIM = ("nominatim", 1.05)
+PHOTON = ("photon", 0.25)
 
 
-def _throttle():
-    now = time.monotonic()
-    wait = 1.05 - (now - _last_call[0])
-    if wait > 0:
-        time.sleep(wait)
-    _last_call[0] = time.monotonic()
+def _throttle(name, interval):
+    """Space calls to one host >= `interval` s apart across processes.
+
+    A lock file per host (in the temp dir) holds the last call's wall-clock
+    time; the flock is held while sleeping, so gunicorn workers queue up.
+    """
+    path = os.path.join(tempfile.gettempdir(), f"hosdesk-geo-{name}.lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    with os.fdopen(fd, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            try:
+                last = float(f.read().strip() or 0)
+            except ValueError:
+                last = 0.0
+            # clamp: a clock step backwards must not stall the worker
+            wait = min(interval, interval - (time.time() - last))
+            if wait > 0:
+                time.sleep(wait)
+            f.seek(0)
+            f.truncate()
+            f.write(repr(time.time()))
+            f.flush()
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def _get(url, params, referer=None):
-    _throttle()
+def _get(url, params, host, referer=None):
+    _throttle(*host)
     headers = {"User-Agent": settings.GEO_USER_AGENT,
                "Accept-Language": "en"}
     if referer:
@@ -88,13 +115,15 @@ def _state_abbr(addr: dict) -> str:
 def _nom_search(query, limit=5):
     return _get(f"{settings.NOMINATIM_URL}/search", {
         "q": query, "format": "jsonv2", "countrycodes": "us",
-        "limit": limit, "addressdetails": 1}, referer=settings.GEO_REFERER)
+        "limit": limit, "addressdetails": 1}, NOMINATIM,
+        referer=settings.GEO_REFERER)
 
 
 def _nom_reverse(lat, lng):
     return _get(f"{settings.NOMINATIM_URL}/reverse", {
         "lat": lat, "lon": lng, "format": "jsonv2",
-        "zoom": 10, "addressdetails": 1}, referer=settings.GEO_REFERER)
+        "zoom": 10, "addressdetails": 1}, NOMINATIM,
+        referer=settings.GEO_REFERER)
 
 
 def _nom_to_place(r, fallback=""):
@@ -106,10 +135,11 @@ def _nom_to_place(r, fallback=""):
                  display=f"{city}, {state}" if state else city, raw=addr)
 
 
-# -- Photon fallback ----------------------------------------------------------
+# -- Photon (fallback; sole typeahead provider) ---------------------------------
 
 def _photon_search(query, limit=5):
-    data = _get(f"{PHOTON_URL}/api/", {"q": query, "limit": limit, "lang": "en"})
+    data = _get(f"{PHOTON_URL}/api/", {"q": query, "limit": limit, "lang": "en"},
+                PHOTON)
     out = []
     for f in data.get("features", []):
         p = f.get("properties", {})
@@ -129,7 +159,8 @@ def _photon_search(query, limit=5):
 
 
 def _photon_reverse(lat, lng):
-    data = _get(f"{PHOTON_URL}/reverse", {"lat": lat, "lon": lng, "lang": "en"})
+    data = _get(f"{PHOTON_URL}/reverse", {"lat": lat, "lon": lng, "lang": "en"},
+                PHOTON)
     feats = data.get("features") or []
     if not feats:
         return {}
@@ -180,26 +211,23 @@ def geocode(query: str) -> Place | None:
 
 
 def autocomplete(query: str, limit: int = 5):
-    try:
-        results = _get(f"{settings.NOMINATIM_URL}/search", {
-            "q": query, "format": "jsonv2", "countrycodes": "us",
-            "limit": limit, "addressdetails": 1, "featuretype": "city"},
-            referer=settings.GEO_REFERER)
-        return [{"lat": float(r["lat"]), "lng": float(r["lon"]),
-                 "label": r.get("display_name", ""),
-                 "city": _city_of(r.get("address") or {}),
-                 "state": _state_abbr(r.get("address") or {})}
-                for r in results]
-    except requests.RequestException:
-        pass
-    try:
-        results = _photon_search(query, limit=limit)
-        return [{"lat": r["lat"], "lng": r["lon"], "label": r["display_name"],
-                 "city": _city_of(r["address"]),
-                 "state": _photon_to_place(r).state}
-                for r in results]
-    except requests.RequestException:
-        return []
+    """Typeahead suggestions from Photon only (Nominatim forbids autocomplete).
+
+    Raises on provider failure so the caller can tell it from "no matches".
+    """
+    key = "geo:ac:" + " ".join(query.lower().split())
+    hit = GeocodeCache.objects.filter(key=key).first()
+    if hit:
+        return hit.payload
+    # over-fetch: non-US features are dropped by _photon_search
+    results = _photon_search(query, limit=limit * 3)[:limit]
+    out = [{"lat": r["lat"], "lng": r["lon"], "label": r["display_name"],
+            "city": _city_of(r["address"]),
+            "state": _photon_to_place(r).state}
+           for r in results]
+    GeocodeCache.objects.update_or_create(
+        key=key, defaults={"payload": out, "created_at": timezone.now()})
+    return out
 
 
 def reverse(lat: float, lng: float) -> Place | None:

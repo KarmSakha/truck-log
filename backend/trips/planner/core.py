@@ -8,7 +8,8 @@ Rules implemented (FMCSA Apr 2022 guide, per PRD §7):
   - 10 consecutive hours OFF/SB resets the 11h driving + 14h window clocks
   - 14h driving window from first ON/D after a 10h restart (no D after)
   - 11h max driving inside the window
-  - 30min break after 8 cumulative driving hours (any non-D status >= 30min)
+  - 30min break after 8 cumulative driving hours (any 30 consecutive
+    non-driving minutes count: ON, OFF or SB, e.g. a 1h pickup)
   - 70h on-duty (D+ON) in rolling 8 days; when the remaining cycle can't
     cover the next on-duty block, a 34h OFF/SB restart resets it
   - Fuel: 30min ON at least once every 1,000 driving miles
@@ -17,6 +18,7 @@ Rules implemented (FMCSA Apr 2022 guide, per PRD §7):
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -98,6 +100,11 @@ def quantize_minutes(x: float) -> int:
     return q if q > 0 else (STEP if x > 0 else 0)
 
 
+def ceil_quarter(x: float) -> int:
+    """Round up to the next 15 minutes (conservative for hours already used)."""
+    return int(math.ceil(round(x / STEP, 6))) * STEP
+
+
 class _Planner:
     def __init__(self, leg_miles, leg_minutes, cycle_used_minutes, start_minute):
         self.leg_miles = leg_miles
@@ -107,6 +114,7 @@ class _Planner:
         self.window_start: Optional[int] = None
         self.drive_in_window = 0
         self.drive_since_break = 0
+        self.non_driving_run = 0       # consecutive non-driving minutes
         self.miles_since_fuel = 0.0
         self.route_miles_done = 0.0
         self.events: list[Event] = []
@@ -144,20 +152,23 @@ class _Planner:
         self.t += duration
         if status in ON_DUTY:
             self.remaining_cycle -= duration
-            if status == STATUS_D:
-                self.drive_in_window += duration
-                self.drive_since_break += duration
-                self.miles_since_fuel += miles
-                self.route_miles_done += miles
+        if status == STATUS_D:
+            self.drive_in_window += duration
+            self.drive_since_break += duration
+            self.miles_since_fuel += miles
+            self.route_miles_done += miles
+            self.non_driving_run = 0
+        else:
+            # Any 30 consecutive non-driving minutes (ON, OFF or SB) satisfy
+            # the 8h break, e.g. a 1h pickup or a 30min fuel stop.
+            self.non_driving_run += duration
+            if self.non_driving_run >= BREAK_MIN:
+                self.drive_since_break = 0
 
     def _ensure_cycle(self, needed_minutes):
         """If the remaining 70h cycle can't cover `needed`, take a 34h restart."""
         if self.remaining_cycle < needed_minutes:
             self._restart_34()
-
-    def _non_driving_reset(self):
-        """A >=30min non-driving period resets the 8h break clock."""
-        self.drive_since_break = 0
 
     def _rest_10(self):
         self._rest_group += 1
@@ -196,12 +207,10 @@ class _Planner:
         self._emit(STATUS_ON, FUEL_MIN, "fuel", remark="Fuel", bracket=True,
                    stop_type="fuel", label="Fuel")
         self.miles_since_fuel = 0.0
-        self._non_driving_reset()
 
     def _break30(self):
         self._emit(STATUS_OFF, BREAK_MIN, "break", remark="30-min break",
                    bracket=True, stop_type="break", label="30-min break")
-        self._non_driving_reset()
 
     # -- driving -------------------------------------------------------------
 
@@ -310,11 +319,12 @@ def plan_trip(leg_miles, leg_minutes, cycle_used_hours, start_minute=360):
 
     leg_miles/leg_minutes: parallel lists, leg0 = current->pickup,
       leg1 = pickup->dropoff. Minutes must already be 15-minute quantized.
-    cycle_used_hours: 0..70 on-duty hours already used this 8-day cycle.
+    cycle_used_hours: 0..70 on-duty hours already used this 8-day cycle
+      (rounded UP to 15 min so the real 70h is never exceeded).
     start_minute: minutes after midnight, home-terminal time (default 06:00).
     """
     assert len(leg_miles) == len(leg_minutes) >= 1
     leg_minutes = [quantize_minutes(m) for m in leg_minutes]
-    cycle_used_minutes = quantize_minutes(float(cycle_used_hours) * 60.0)
+    cycle_used_minutes = ceil_quarter(float(cycle_used_hours) * 60.0)
     p = _Planner(leg_miles, leg_minutes, cycle_used_minutes, start_minute)
     return p.run()
