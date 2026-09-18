@@ -1,5 +1,7 @@
 # HOS Desk
 
+**Live: https://hosdesk.karmx.dev**
+
 A night-dispatch trip planner that turns a truck driver's leg into a **legal
 FMCSA-style paper daily log**. Enter the truck's current location, the pickup,
 the dropoff, and how much of the 70-hour/8-day cycle is already burned — the
