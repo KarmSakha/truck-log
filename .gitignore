@@ -1,0 +1,23 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+db.sqlite3
+staticfiles/
+
+# node
+node_modules/
+dist/
+
+# env
+.env
+
+# os / tooling
+.DS_Store
+.playwright-mcp/
+*.png.tmp
+
+# design references (local inputs, not deliverables)
+refs/
+Screenshot*.png
+*.pdf
