@@ -204,6 +204,10 @@ export default function DispatchTicket({
           </div>
           <div className="cycle-chip">70H / 8D · PROPERTY</div>
         </div>
+        <p className="tagline">
+          Plan an HOS-legal route, then get every daily log sheet drawn and
+          filled in — one per day, ready to print.
+        </p>
 
         <div className="ticket-body">
           <div className="spine">
@@ -222,15 +226,26 @@ export default function DispatchTicket({
               error={errors.dropoff_location} />
           </div>
 
-          <CycleTank value={v.cycle} onChange={set("cycle")} />
+          {phase === "results" ? (
+            <label className="cycle-inline" title="Hours already used in the current 70h / 8-day cycle">
+              Cycle used
+              <input type="number" min="0" max="70" step="0.25" value={v.cycle}
+                onChange={(e) =>
+                  set("cycle")(Math.min(70, Math.max(0, parseFloat(e.target.value) || 0)))
+                } />
+              h
+            </label>
+          ) : (
+            <CycleTank value={v.cycle} onChange={set("cycle")} />
+          )}
 
           <div className="ticket-actions">
             <button className={`cta ${phase === "results" ? "done" : ""}`}
-              type="submit" disabled={planning}>
-              <span className="cta-ico">
-                {phase === "results" ? "✓" : "→"}
+              type="submit" disabled={planning} aria-busy={planning}>
+              <span className={`cta-ico ${planning ? "spin" : ""}`} aria-hidden="true">
+                {planning ? "◌" : phase === "results" ? "↻" : "→"}
               </span>
-              {planning ? "Plotting HOS…" : "Draw the logs"}
+              {planning ? "Plotting HOS…" : phase === "results" ? "Replan" : "Draw the logs"}
             </button>
             <button className="btn-text" type="button" onClick={onSample}
               disabled={planning}>
@@ -261,7 +276,7 @@ export default function DispatchTicket({
           )}
 
           <details>
-            <summary>optional · start 06:00 · Chicago TZ · carrier / load</summary>
+            <summary>optional · start 06:00 · Chicago TZ · carrier / driver / load</summary>
             <div className="opt-grid">
               <div>
                 <label htmlFor="o-start">Start time</label>
@@ -283,6 +298,18 @@ export default function DispatchTicket({
                 <input id="o-carrier" value={v.carrier}
                   onChange={(e) => set("carrier")(e.target.value)}
                   placeholder="Demo Carrier" />
+              </div>
+              <div>
+                <label htmlFor="o-driver">Driver</label>
+                <input id="o-driver" value={v.driver}
+                  onChange={(e) => set("driver")(e.target.value)}
+                  placeholder="Signs the log" />
+              </div>
+              <div>
+                <label htmlFor="o-codriver">Co-driver</label>
+                <input id="o-codriver" value={v.coDriver}
+                  onChange={(e) => set("coDriver")(e.target.value)}
+                  placeholder="N/A" />
               </div>
               <div>
                 <label htmlFor="o-tractor">Tractor</label>

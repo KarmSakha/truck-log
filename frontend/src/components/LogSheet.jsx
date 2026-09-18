@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /* =================== sheet geometry (viewBox units) =================== */
 export const W = 1280;
@@ -37,6 +37,74 @@ const HOUR_LABELS = [
   "noon", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "Midnight",
 ];
 
+/* recap boxes, worded exactly as on the paper form (day counts included) */
+const RECAP_BOX_W = 158;
+const RECAP_GAP = 10;
+const RECAP_GROUP_W = 3 * RECAP_BOX_W + 2 * RECAP_GAP; // 494
+const RECAP_TODAY_LABEL = ["ON DUTY HOURS TODAY,", "TOTAL LINES 3 & 4"];
+const RECAP_GROUPS = [
+  {
+    title: "70 HOUR / 8 DAY DRIVERS", x: 226, values: ["a", "b", "c"],
+    boxes: [
+      ["A. TOTAL HOURS ON DUTY", "LAST 7 DAYS INCLUDING TODAY."],
+      ["B. TOTAL HOURS AVAILABLE", "TOMORROW 70 HR. MINUS A*"],
+      ["C. TOTAL HOURS ON DUTY", "LAST 5 DAYS INCLUDING TODAY."],
+    ],
+  },
+  {
+    title: "60 HOUR / 7 DAY DRIVERS", x: W - M - RECAP_GROUP_W, values: null,
+    boxes: [
+      ["A. TOTAL HOURS ON DUTY", "LAST 8 DAYS INCLUDING TODAY."],
+      ["B. TOTAL HOURS AVAILABLE", "TOMORROW 60 HR. MINUS A*"],
+      ["C. TOTAL HOURS ON DUTY", "LAST 7 DAYS INCLUDING TODAY."],
+    ],
+  },
+];
+
+/* ---- text measurement (canvas), so labels and remarks can be fitted ---- */
+const HAND_FONT = "Caveat, cursive";
+const FORM_FONT = '"IBM Plex Sans Condensed", sans-serif';
+const SHEET_FONTS = [`600 17px ${HAND_FONT}`, `500 15px ${HAND_FONT}`, `400 10px ${FORM_FONT}`];
+
+let measureCtx = null;
+function textWidth(text, font, letterSpacing = 0) {
+  const s = String(text ?? "");
+  if (!s) return 0;
+  try {
+    measureCtx ||= document.createElement("canvas").getContext("2d");
+    measureCtx.font = font;
+    return measureCtx.measureText(s).width + s.length * letterSpacing;
+  } catch {
+    return s.length * 8;
+  }
+}
+
+/* a measure fn that changes identity once the web fonts are in, so memoised
+   layouts re-measure (fallback font metrics differ) */
+let fontsLoading = null;
+function useTextMeasure() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let live = true;
+    fontsLoading ||= Promise.all(
+      SHEET_FONTS.map((f) => document.fonts?.load(f))
+    ).catch(() => {});
+    fontsLoading.then(() => live && setReady(true));
+    return () => { live = false; };
+  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useCallback((text, font, ls) => textWidth(text, font, ls), [ready]);
+}
+
+/* remarks: diagonal, top-right end at REMARK_Y, running down-left */
+const REMARK_Y = 452;
+const REMARK_FLOOR = 600;     // stay clear of the instruction line (y 618)
+const REMARK_MIN_X = 120;
+const REMARK_MAX_X = 1020;    // stay clear of the circled on-duty total
+const REMARK_GAP = 60;        // horizontal gap keeps parallel diagonals apart
+const REMARK_LINE2 = 16;      // activity line offset, in the rotated frame
+const DIAG = Math.SQRT1_2;
+
 /* small helper: a boxed handwritten number */
 function DigitBoxes({ x, y, value, boxes = 2, boxW = 26, boxH = 30, size = 20 }) {
   const digits = String(value).padStart(boxes, " ").slice(-boxes);
@@ -72,18 +140,26 @@ function DigitBoxes({ x, y, value, boxes = 2, boxW = 26, boxH = 30, size = 20 })
   );
 }
 
-function FillLine({ x1, x2, y, label, value, labelAbove = true }) {
+function FillLine({ x1, x2, y, label, value, labelBelow = false }) {
+  // The value is centred on the line, but never over a label that sits on
+  // the same side of it, and shrinks rather than running past the line.
+  const labelEnd = label && !labelBelow
+    ? x1 + 2 + textWidth(label, `400 9.5px ${FORM_FONT}`, 0.38) + 14
+    : x1;
+  const room = x2 - labelEnd - 4;
+  const w = textWidth(value, `600 21px ${HAND_FONT}`);
+  const size = w > room ? Math.max(13, (21 * room) / w) : 21;
+  const half = (w * size) / 21 / 2;
+  const cx = Math.min(Math.max((x1 + x2) / 2, labelEnd + half), x2 - half);
   return (
     <g>
       <line x1={x1} y1={y} x2={x2} y2={y} stroke={FORM_LINE} strokeWidth="1.2" />
-      {labelAbove && (
-        <text x={x1 + 2} y={y - 4} fontSize="9.5" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.04em">
-          {label}
-        </text>
-      )}
+      <text x={x1 + 2} y={labelBelow ? y + 13 : y - 4} fontSize="9.5" fill={FORM_TXT}
+        fontFamily="var(--condensed)" letterSpacing="0.04em">
+        {label}
+      </text>
       {value && (
-        <text x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize="21"
+        <text x={cx} y={y - 6} textAnchor="middle" fontSize={size}
           fontFamily="var(--hand)" fontWeight="600" fill={INK}>
           {value}
         </text>
@@ -130,17 +206,30 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
 
   const drawnLen = ip * totalLen;
 
-  /* remark lanes to avoid collisions */
+  /* Remarks share one top line and are spread sideways: parallel diagonals
+     never cross once they are REMARK_GAP apart. Each is then shrunk to fit
+     between that line, the box floor and the box's left edge. */
+  const measure = useTextMeasure();
   const remarkLayout = useMemo(() => {
-    const lanes = [];
+    const xs = log.remarks.map((r) =>
+      Math.min(Math.max(xOf((r.seg_start_min + r.seg_end_min) / 2) + 46, REMARK_MIN_X), REMARK_MAX_X));
+    for (let i = 1; i < xs.length; i++) xs[i] = Math.max(xs[i], xs[i - 1] + REMARK_GAP);
+    for (let i = xs.length - 1; i >= 0; i--) {
+      xs[i] = Math.min(xs[i], i === xs.length - 1 ? REMARK_MAX_X : xs[i + 1] - REMARK_GAP);
+      xs[i] = Math.max(xs[i], REMARK_MIN_X);
+    }
     return log.remarks.map((r, i) => {
-      const anchorX = Math.min(Math.max(xOf((r.seg_start_min + r.seg_end_min) / 2) + 60, 250), 1140);
-      let lane = 0;
-      while (lanes[lane] !== undefined && anchorX - lanes[lane] < 170) lane++;
-      lanes[lane] = anchorX;
-      return { ...r, anchorX, lane, doneAt: remarkDoneAt[i] };
+      const x = xs[i];
+      const place = [r.city, r.state].filter(Boolean).join(", ");
+      const off = REMARK_LINE2 * DIAG;
+      const fit1 = Math.min((REMARK_FLOOR - REMARK_Y) / DIAG, (x - M - 10) / DIAG);
+      const fit2 = Math.min((REMARK_FLOOR - REMARK_Y - off) / DIAG, (x + off - M - 10) / DIAG);
+      const scale = Math.max(0.55, Math.min(1,
+        fit1 / (measure(place, `600 17px ${HAND_FONT}`) || 1),
+        fit2 / (measure(r.activity, `500 15.5px ${HAND_FONT}`) || 1)));
+      return { ...r, place, anchorX: x, scale, doneAt: remarkDoneAt[i] };
     });
-  }, [log, remarkDoneAt]);
+  }, [log, remarkDoneAt, measure]);
 
   const d = new Date(log.date + "T12:00:00");
   const [mm, dd, yy] = [
@@ -406,14 +495,14 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
                     fill="none" stroke={INK} strokeWidth="2.4"
                     strokeLinecap="round" />
                 )}
-                <g transform={`rotate(-45 ${r.anchorX} ${GRID_B + 74 + r.lane * 44})`}>
-                  <text x={r.anchorX} y={GRID_B + 74 + r.lane * 44}
-                    textAnchor="end" fontSize="17" fontWeight="600"
+                <g transform={`rotate(-45 ${r.anchorX} ${REMARK_Y})`}>
+                  <text x={r.anchorX} y={REMARK_Y}
+                    textAnchor="end" fontSize={17 * r.scale} fontWeight="600"
                     fontFamily="var(--hand)" fill={INK}>
-                    {[r.city, r.state].filter(Boolean).join(", ")}
+                    {r.place}
                   </text>
-                  <text x={r.anchorX} y={GRID_B + 74 + r.lane * 44 + 16}
-                    textAnchor="end" fontSize="15.5" fontWeight="500"
+                  <text x={r.anchorX} y={REMARK_Y + REMARK_LINE2}
+                    textAnchor="end" fontSize={15.5 * r.scale} fontWeight="500"
                     fontFamily="var(--hand)" fill={INK}>
                     {r.activity}
                   </text>
@@ -463,48 +552,57 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
           *IF YOU TOOK 34 CONSECUTIVE HOURS OFF DUTY YOU HAVE 60/70 HOURS AVAILABLE
         </text>
 
-        {/* column headers */}
-        <rect x={740} y={726} width={230} height={26} fill="none" stroke={FORM_LINE} strokeWidth="1" />
-        <rect x={986} y={726} width={254} height={26} fill="none" stroke={FORM_LINE} strokeWidth="1" />
-        <text x={855} y={743} textAnchor="middle" fontSize="11" fontWeight="600"
-          fill={FORM_TXT} fontFamily="var(--condensed)" letterSpacing="0.05em">
-          70 HOUR / 8 DAY DRIVERS
-        </text>
-        <text x={1113} y={743} textAnchor="middle" fontSize="11" fontWeight="600"
-          fill={FORM_TXT} fontFamily="var(--condensed)" letterSpacing="0.05em">
-          60 HOUR / 7 DAY DRIVERS
-        </text>
+        {/* column group headers */}
+        {RECAP_GROUPS.map((g) => (
+          <g key={g.title}>
+            <rect x={g.x} y={724} width={RECAP_GROUP_W} height={24}
+              fill="none" stroke={FORM_LINE} strokeWidth="1" />
+            <text x={g.x + RECAP_GROUP_W / 2} y={740} textAnchor="middle"
+              fontSize="11" fontWeight="600" fill={FORM_TXT}
+              fontFamily="var(--condensed)" letterSpacing="0.05em">
+              {g.title}
+            </text>
+          </g>
+        ))}
 
-        {/* recap rows */}
+        {/* one box per recap entry, the form's wording under each; only the
+            70/8 column is filled in (the 60/7 boxes stay blank, as on paper) */}
         {[
-          { lbl: "ON DUTY HOURS TODAY (TOTAL LINES 3 & 4)", v: log.recap.on_duty_today },
-          { lbl: "A. TOTAL HOURS ON DUTY LAST 7 DAYS INCLUDING TODAY", v: log.recap.a },
-          { lbl: "B. TOTAL HOURS AVAILABLE TOMORROW (70 − A*)", v: log.recap.b },
-          { lbl: "C. TOTAL HOURS ON DUTY LAST 8 DAYS", v: log.recap.c },
-        ].map((r, i) => {
-          const y = 752 + i * 34;
-          return (
-            <g key={i}>
-              <text x={M} y={y + 22} fontSize="10.5" fill={FORM_TXT}
-                fontFamily="var(--condensed)" letterSpacing="0.03em">
-                {r.lbl}
-              </text>
-              <rect x={740} y={y} width={230} height={30} fill="none"
-                stroke={FORM_LINE} strokeWidth="1" />
-              <rect x={986} y={y} width={254} height={30} fill="none"
-                stroke={FORM_LINE} strokeWidth="1" />
-              <text x={855} y={y + 23} textAnchor="middle" fontSize="19"
+          { x: M, w: 156, lbl: RECAP_TODAY_LABEL, v: log.recap.on_duty_today },
+          ...RECAP_GROUPS.flatMap((g) =>
+            g.boxes.map((lbl, i) => ({
+              x: g.x + i * (RECAP_BOX_W + RECAP_GAP),
+              w: RECAP_BOX_W,
+              lbl,
+              v: g.values ? log.recap[g.values[i]] : null,
+            }))
+          ),
+        ].map((b) => (
+          <g key={b.x}>
+            <rect x={b.x} y={756} width={b.w} height={38} fill="none"
+              stroke={FORM_LINE} strokeWidth="1" />
+            {b.v != null && (
+              <text x={b.x + b.w / 2} y={783} textAnchor="middle" fontSize="21"
                 fontFamily="var(--hand)" fontWeight="700" fill={INK}>
-                {i === 0 ? r.v : r.v}
+                {b.v}
               </text>
-              <text x={1113} y={y + 23} textAnchor="middle" fontSize="15"
-                fontFamily="var(--hand)" fontWeight="600" fill="#9a8f7c">
-                N/A
+            )}
+            {b.lbl.map((ln, j) => (
+              <text key={j} x={b.x + 2} y={808 + j * 13} fontSize="9.5"
+                fill={FORM_TXT} fontFamily="var(--condensed)" letterSpacing="0.03em">
+                {ln}
               </text>
-            </g>
-          );
-        })}
+            ))}
+          </g>
+        ))}
       </g>
+
+      {/* ============ CERTIFICATION ============ */}
+      <FillLine x1={M} x2={620} y={900} labelBelow
+        label="DRIVER'S SIGNATURE IN FULL — I CERTIFY THAT THESE ENTRIES ARE TRUE AND CORRECT"
+        value={meta?.driver && meta.driver !== "N/A" ? meta.driver : null} />
+      <FillLine x1={660} x2={W - M} y={900} labelBelow
+        label="NAME OF CO-DRIVER" value={meta?.co_driver} />
 
       {/* ============ circled on-duty decimal ============ */}
       {ip > 0.9 && (

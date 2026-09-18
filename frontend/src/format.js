@@ -24,21 +24,22 @@ export function fmtDateLabel(iso) {
     .toUpperCase();
 }
 
-export function fmtStopTime(iso) {
-  const d = new Date(iso);
-  const h = d.getHours();
-  const ap = h < 12 ? "a" : "p";
-  const hh = h % 12 === 0 ? 12 : h % 12;
-  return `${hh}:${String(d.getMinutes()).padStart(2, "0")}${ap}`;
+/* Trip minutes count from day-0 midnight in home-terminal time, the same
+   clock the log sheets use (not the viewer's browser timezone). */
+export function fmtTripTime(min) {
+  return `Day ${Math.floor(min / 1440) + 1} · ${fmtClock(min % 1440)}`;
 }
 
-export function fmtStopDay(iso) {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
+export function fmtDur(min) {
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  if (!h) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+export function fmtWeekday(iso) {
+  return new Date(iso + "T12:00:00")
+    .toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
 export const STATUS_META = {

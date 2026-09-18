@@ -1,31 +1,29 @@
 import { useEffect, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
-import { fmtStopTime, STOP_KIND_META } from "../format.js";
+import { fmtDur, fmtTripTime, STOP_KIND_META } from "../format.js";
+import { GLYPHS, stopGlyph } from "../glyphs.js";
 
 const DARK_STYLE =
   "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
-const GLYPHS = {
-  diamond: `<svg width="18" height="18" viewBox="0 0 18 18"><rect x="4" y="4" width="10" height="10" transform="rotate(45 9 9)" fill="#0c1220" stroke="#c5cdd8" stroke-width="2"/></svg>`,
-  P: `<svg width="20" height="20" viewBox="0 0 20 20"><rect x="1.5" y="1.5" width="17" height="17" rx="3" fill="#0c1220" stroke="#e8a317" stroke-width="2"/><text x="10" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#e8a317" font-family="IBM Plex Sans Condensed,sans-serif">P</text></svg>`,
-  D: `<svg width="20" height="20" viewBox="0 0 20 20"><rect x="1.5" y="1.5" width="17" height="17" rx="3" fill="#0c1220" stroke="#e8edf4" stroke-width="2"/><text x="10" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#e8edf4" font-family="IBM Plex Sans Condensed,sans-serif">D</text></svg>`,
-  fuel: `<svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 1.5 C9 1.5 4 8 4 11.5 a5 5 0 0 0 10 0 C14 8 9 1.5 9 1.5Z" fill="#0c1220" stroke="#c45c26" stroke-width="2"/><circle cx="9" cy="11.5" r="1.6" fill="#c45c26"/></svg>`,
-  pause: `<svg width="18" height="18" viewBox="0 0 18 18"><path d="M11 2 A8 8 0 1 0 16 9 A6.5 6.5 0 0 1 11 2Z" fill="#0c1220" stroke="#8b93a1" stroke-width="2"/></svg>`,
-  berth: `<svg width="20" height="18" viewBox="0 0 20 18"><rect x="1.5" y="3.5" width="17" height="11" rx="2" fill="#0c1220" stroke="#6e7aa8" stroke-width="2"/><line x1="4.5" y1="6.5" x2="15.5" y2="6.5" stroke="#6e7aa8" stroke-width="1.6"/></svg>`,
-  restart: `<svg width="20" height="18" viewBox="0 0 20 18"><rect x="2" y="3" width="4.5" height="12" rx="1" fill="#b42318" opacity="0.85"/><rect x="9" y="3" width="4.5" height="12" rx="1" fill="#b42318" opacity="0.85"/><rect x="15" y="3" width="4.5" height="12" rx="1" fill="#b42318" opacity="0.4"/></svg>`,
-  clipboard: `<svg width="16" height="18" viewBox="0 0 16 18"><rect x="1.5" y="2.5" width="13" height="14" rx="2" fill="#0c1220" stroke="#c45c26" stroke-width="1.8"/><rect x="5" y="1" width="6" height="3" rx="1" fill="#c45c26"/></svg>`,
-  truck: `<svg width="26" height="18" viewBox="0 0 26 18"><rect x="1" y="3" width="14" height="9" rx="1" fill="#e8a317"/><rect x="16" y="6" width="8" height="6" rx="1" fill="#e8a317"/><circle cx="6" cy="14" r="2.4" fill="#0c1220" stroke="#e8edf4" stroke-width="1"/><circle cx="19" cy="14" r="2.4" fill="#0c1220" stroke="#e8edf4" stroke-width="1"/></svg>`,
-};
+const PAD = { top: 70, bottom: 70, left: 70, right: 70 };
 
 export default function RouteMap({
   route, stops, litStop, onStopHover, onStopClick,
-  truckPos, revealKey,
+  truckPos, revealKey, focus,
 }) {
   const el = useRef(null);
   const map = useRef(null);
   const markers = useRef(new Map());
   const truck = useRef(null);
   const tip = useRef(null);
+  const bounds = useRef(null);
+
+  const fitRoute = (duration = 500) => {
+    if (map.current && bounds.current) {
+      map.current.fitBounds(bounds.current, { padding: PAD, duration });
+    }
+  };
 
   /* ------- init map once ------- */
   useEffect(() => {
@@ -58,7 +56,24 @@ export default function RouteMap({
       });
     });
     map.current = m;
-    return () => { m.remove(); map.current = null; };
+
+    // MapLibre ignores the first container resize it observes, and the pane
+    // shrinks from full-bleed to split view right as a trip loads — so the
+    // canvas could stay full-window size with the route hidden behind the
+    // log pane. Track the container ourselves and re-fit the route.
+    const ro = new ResizeObserver(() => {
+      const c = el.current;
+      const cv = m.getCanvas();
+      if (!c) return;
+      if (Math.abs(cv.clientWidth - c.clientWidth) > 1
+          || Math.abs(cv.clientHeight - c.clientHeight) > 1) {
+        m.resize();
+        if (bounds.current) m.fitBounds(bounds.current, { padding: PAD, duration: 0 });
+      }
+    });
+    ro.observe(el.current);
+
+    return () => { ro.disconnect(); m.remove(); map.current = null; };
   }, []);
 
   /* ------- paint route + markers when a trip arrives ------- */
@@ -80,13 +95,11 @@ export default function RouteMap({
       const leg0Coords = coords.slice(0, l1 ? l1.coord_start + 1 : coords.length);
       const leg1Coords = l1 ? coords.slice(l1.coord_start) : [];
 
-      // fit bounds — the pane may still be morphing from landing size, so
-      // re-fit shortly after the internal canvas resize settles.
       const b = new maplibregl.LngLatBounds();
       coords.forEach((c) => b.extend(c));
-      const PAD = { top: 70, bottom: 70, left: 70, right: 70 };
+      bounds.current = b;
+      m.resize();
       m.fitBounds(b, { padding: PAD, duration: 0 });
-      m.once("resize", () => m.fitBounds(b, { padding: PAD, duration: 0 }));
       setTimeout(() => m.fitBounds(b, { padding: PAD, duration: 500 }), 300);
 
       // route paint-on animation (~1.2s)
@@ -130,25 +143,32 @@ export default function RouteMap({
         const node = document.createElement("div");
         node.className = "stop-marker";
         node.style.cssText = "opacity:0;transition:opacity .25s";
-        node.innerHTML = GLYPHS[meta.glyph] || GLYPHS.diamond;
+        node.innerHTML = stopGlyph(s.type);
+        node.tabIndex = 0;
         node.setAttribute("role", "button");
-        node.setAttribute("aria-label", `${meta.label} ${s.city || ""}`);
+        node.setAttribute("aria-label",
+          `${meta.label}, ${[s.city, s.state].filter(Boolean).join(", ")}, ${fmtTripTime(s.start_min)}`);
         const halo = document.createElement("div");
         halo.className = "halo";
         halo.style.cssText =
           "position:absolute;inset:-9px;border:2px solid #e8a317;border-radius:50%;pointer-events:none";
         node.appendChild(halo);
-        node.addEventListener("mouseenter", () => {
-          onStopHover?.(s.id);
-          showTip(s, meta);
-        });
-        node.addEventListener("mouseleave", () => {
-          onStopHover?.(null);
-          hideTip();
-        });
+        const enter = () => { onStopHover?.(s.id); showTip(s, meta); };
+        const leave = () => { onStopHover?.(null); hideTip(); };
+        node.addEventListener("mouseenter", enter);
+        node.addEventListener("mouseleave", leave);
+        node.addEventListener("focus", enter);
+        node.addEventListener("blur", leave);
         node.addEventListener("click", () => {
           onStopClick?.(s);
           pulse(node);
+        });
+        node.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onStopClick?.(s);
+            pulse(node);
+          }
         });
         const mk = new maplibregl.Marker({ element: node, anchor: "center" })
           .setLngLat([s.lng, s.lat])
@@ -159,15 +179,17 @@ export default function RouteMap({
 
       function showTip(s, meta) {
         hideTip();
+        // built with textContent: place names come from the geocoder
         const t = document.createElement("div");
         t.className = "stop-tip";
-        const dur = s.duration_min ? ` · ${Math.floor(s.duration_min / 60)}:${String(s.duration_min % 60).padStart(2, "0")}` : "";
-        t.innerHTML = `<div class="tt">${meta.label}</div>${s.city || ""}${s.state ? ", " + s.state : ""} · ${fmtStopTime(s.start_iso)}${dur}`;
-        node_ref(s.id)?.appendChild(t);
+        const head = document.createElement("div");
+        head.className = "tt";
+        head.textContent = meta.label;
+        const place = [s.city, s.state].filter(Boolean).join(", ");
+        const dur = s.duration_min ? ` · ${fmtDur(s.duration_min)}` : "";
+        t.append(head, `${place} · ${fmtTripTime(s.start_min)}${dur}`);
+        markers.current.get(s.id)?.getElement().appendChild(t);
         tip.current = t;
-      }
-      function node_ref(id) {
-        return markers.current.get(id)?.getElement();
       }
       function hideTip() { tip.current?.remove(); tip.current = null; }
       function pulse(node) {
@@ -191,6 +213,17 @@ export default function RouteMap({
     });
   }, [litStop]);
 
+  /* ------- centre on a stop picked from the itinerary ------- */
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !focus || focus.lat == null) return;
+    m.easeTo({
+      center: [focus.lng, focus.lat],
+      zoom: Math.max(m.getZoom(), 6.5),
+      duration: 700,
+    });
+  }, [focus]);
+
   /* ------- replay truck ------- */
   useEffect(() => {
     const m = map.current;
@@ -212,5 +245,18 @@ export default function RouteMap({
     }
   }, [truckPos]);
 
-  return <div ref={el} style={{ position: "absolute", inset: 0 }} />;
+  return (
+    <>
+      <div ref={el} style={{ position: "absolute", inset: 0 }} />
+      {route && (
+        <button type="button" className="map-fit" onClick={() => fitRoute()}
+          title="Fit the whole route" aria-label="Fit the whole route in view">
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" fill="none"
+              stroke="currentColor" strokeWidth="1.6" />
+          </svg>
+        </button>
+      )}
+    </>
+  );
 }

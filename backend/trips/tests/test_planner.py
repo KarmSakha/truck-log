@@ -271,3 +271,45 @@ class GoldenFixtureTest(SimpleTestCase):
         self.assertEqual(log["on_duty_decimal"], 10.5)
         self.assertEqual(log["miles_driving"], 472)
         self.assertEqual(len(log["remarks"]), 4)
+
+
+class RecapTests(SimpleTestCase):
+    """70/8 recap: A = last 7 days, B = 70 - A, C = last 5 days (paper form)."""
+
+    def test_recap_after_restart_counts_only_post_restart_hours(self):
+        lm, lt = legs((30, 30), (2400, 44 * 60))
+        plan = plan_trip(lm, lt, cycle_used_hours=66)
+        restart_end = next(e.end for e in plan.events if e.kind == "restart_sb")
+        logs = build_day_logs(plan, date(2026, 9, 19), 66 * 60)
+        for d, log in enumerate(logs):
+            r = log["recap"]
+            self.assertGreaterEqual(r["a"], 0)
+            self.assertLessEqual(r["a"], 70)
+            self.assertAlmostEqual(r["b"], 70 - r["a"], places=2)
+            self.assertLessEqual(r["c"], r["a"])
+            day_end = (d + 1) * DAY
+            if restart_end <= day_end:
+                since = sum(
+                    max(0, min(e.end, day_end) - max(e.start, restart_end))
+                    for e in plan.events if e.status in (STATUS_D, STATUS_ON)
+                )
+                self.assertAlmostEqual(r["a"], since / 60, places=2)
+
+    def test_recap_c_is_a_five_day_window(self):
+        from trips.planner.core import Event, PlanResult
+
+        # 6 days, 2h on duty each morning, 10h of prior cycle hours.
+        evs = []
+        for d in range(6):
+            base = d * DAY
+            evs += [Event(base, base + 360, STATUS_OFF, "off"),
+                    Event(base + 360, base + 480, STATUS_ON, "on"),
+                    Event(base + 480, base + DAY, STATUS_OFF, "off")]
+        plan = PlanResult(events=evs, stops=[], days=6)
+        logs = build_day_logs(plan, date(2026, 9, 19), 10 * 60)
+        # day 4 (index 3): both windows reach before the trip -> prior counts
+        self.assertEqual(logs[3]["recap"]["c"], 10 + 4 * 2)
+        # day 6 (index 5): C covers trip days 2-6 only, A still reaches back
+        self.assertEqual(logs[5]["recap"]["c"], 5 * 2)
+        self.assertEqual(logs[5]["recap"]["a"], 10 + 6 * 2)
+        self.assertEqual(logs[5]["recap"]["b"], 70 - 22)

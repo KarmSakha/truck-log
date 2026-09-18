@@ -194,7 +194,7 @@ def trip_create(request):
             "tractor": body.get("tractor") or "N/A",
             "trailer": body.get("trailer") or "N/A",
             "driver": body.get("driver") or "N/A",
-            "co_driver": "N/A",
+            "co_driver": body.get("co_driver") or "N/A",
             "home_terminal": body.get("home_terminal") or current.display,
             "main_office": body.get("main_office") or "N/A",
             "timezone": tz_name,

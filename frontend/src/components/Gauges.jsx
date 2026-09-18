@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { fmtDur } from "../format.js";
 
 function useCountUp(target, dur = 700, key) {
   const [v, setV] = useState(0);
@@ -39,11 +40,14 @@ function Gauge({ label, usedMin, maxMin, suffix, fillClass }) {
   );
 }
 
-export default function Gauges({ summary }) {
+export default function Gauges({ summary, arrival }) {
   const g = summary?.gauges || {};
   const windowUsed = g.window_elapsed_min ?? 0;
   return (
-    <div className="instruments" role="group" aria-label="HOS gauges">
+    <div className="instruments" role="group" aria-label="HOS clocks at dropoff and trip totals">
+      <div className="inst-tag" aria-hidden="true">
+        <span>Clocks</span><span>at drop</span>
+      </div>
       <Gauge label="11h driving" usedMin={g.drive_used_min || 0} maxMin={660} />
       <Gauge label="14h window" usedMin={windowUsed} maxMin={840}
         suffix={g.window_elapsed_min == null ? " (reset)" : ""} />
@@ -51,11 +55,15 @@ export default function Gauges({ summary }) {
       <div className="stat-chip">
         <span className="s-label">Miles</span>
         <span className="s-value">{summary.total_miles.toLocaleString()}</span>
+        <span className="s-sub">{fmtDur(summary.total_driving_minutes)} driving</span>
       </div>
-      <div className="stat-chip">
-        <span className="s-label">Sheets</span>
-        <span className="s-value">{summary.days} day{summary.days > 1 ? "s" : ""}</span>
-      </div>
+      {arrival && (
+        <div className="stat-chip">
+          <span className="s-label">Arrive</span>
+          <span className="s-value">{arrival.time}</span>
+          <span className="s-sub">{arrival.day}</span>
+        </div>
+      )}
       <div className="stat-chip">
         <span className="s-label">Stops</span>
         <span className="s-value">

@@ -4,7 +4,7 @@ import Gauges from "./components/Gauges.jsx";
 import LogBook from "./components/LogBook.jsx";
 import RouteMap from "./components/RouteMap.jsx";
 import { fetchTrip, planTrip } from "./api.js";
-import { fmtClock } from "./format.js";
+import { fmtClock, fmtWeekday } from "./format.js";
 
 const SAMPLE = {
   current: "Chicago, IL",
@@ -16,7 +16,8 @@ const SAMPLE = {
 const EMPTY = {
   current: "", pickup: "", dropoff: "", cycle: 20,
   startTime: "", tz: "America/Chicago",
-  carrier: "", tractor: "", trailer: "", shipper: "", commodity: "",
+  carrier: "", driver: "", coDriver: "",
+  tractor: "", trailer: "", shipper: "", commodity: "",
 };
 
 /* cumulative haversine miles over the route geometry */
@@ -48,6 +49,8 @@ export default function App() {
   const [replaying, setReplaying] = useState(false);
   const [replayTime, setReplayTime] = useState(0);
   const [revealKey, setRevealKey] = useState(0);
+  const [wide, setWide] = useState(false);       // log pane expanded
+  const [mapFocus, setMapFocus] = useState(null); // stop picked in itinerary
   const replayRaf = useRef(0);
   const stepTimer = useRef(0);
 
@@ -137,6 +140,8 @@ export default function App() {
         start_time: vals.startTime || undefined,
         timezone: vals.tz,
         carrier: vals.carrier || undefined,
+        driver: vals.driver || undefined,
+        co_driver: vals.coDriver || undefined,
         tractor: vals.tractor || undefined,
         trailer: vals.trailer || undefined,
         shipper: vals.shipper || undefined,
@@ -192,6 +197,30 @@ export default function App() {
     if (stopId == null) setLitMin(null);
   }, []);
 
+  // itinerary rows stay on the open day (a rest that began yesterday
+  // lights the top of today's grid instead of flipping the tab back)
+  const onItemHover = useCallback((s) => {
+    if (!s) { setLitStop(null); setLitMin(null); return; }
+    setLitStop(s.id);
+    setLitMin(Math.max(0, s.start_min - activeDay * 1440));
+  }, [activeDay]);
+
+  const onItemPick = useCallback((s) => {
+    onItemHover(s);
+    if (s.lat != null) setMapFocus({ lat: s.lat, lng: s.lng });
+  }, [onItemHover]);
+
+  const arrival = useMemo(() => {
+    const d = trip?.stops.find((s) => s.type === "dropoff");
+    if (!d) return null;
+    const day = Math.floor(d.start_min / 1440);
+    const date = trip.logs[day]?.date;
+    return {
+      time: fmtClock(d.start_min % 1440),
+      day: `Day ${day + 1}${date ? " · " + fmtWeekday(date) : ""}`,
+    };
+  }, [trip]);
+
   /* ---------- replay ---------- */
   const stopReplay = useCallback(() => {
     cancelAnimationFrame(replayRaf.current);
@@ -227,7 +256,9 @@ export default function App() {
 
   /* ---------- render ---------- */
   return (
-    <div className="app" data-phase={phase}>
+    <div className="app" data-phase={phase} data-wide={wide || undefined}
+      data-busy={planning || undefined}>
+      {planning && <div className="top-progress" role="progressbar" aria-label="Planning trip" />}
       {phase === "results" && trip && (
         <>
           <DispatchTicket
@@ -243,7 +274,7 @@ export default function App() {
             toast={toast}
             onRetry={() => submit()}
           />
-          <Gauges summary={trip.summary} />
+          <Gauges summary={trip.summary} arrival={arrival} />
         </>
       )}
 
@@ -258,10 +289,12 @@ export default function App() {
             onStopClick={onStopClick}
             truckPos={truckPos}
             revealKey={revealKey}
+            focus={mapFocus}
           />
           {phase === "results" && replaying && (
             <div className="replay-bar">
-              <button className="mini-btn" onClick={stopReplay}>■</button>
+              <button type="button" className="mini-btn" onClick={stopReplay}
+                aria-label="Stop replay">■</button>
               <span className="rb-time">
                 Day {activeDay + 1} · {fmtClock(Math.floor(replayTime))}
               </span>
@@ -278,6 +311,12 @@ export default function App() {
           <LogBook
             logs={trip.logs}
             meta={trip.meta}
+            stops={trip.stops}
+            litStop={litStop}
+            onItemHover={onItemHover}
+            onItemPick={onItemPick}
+            wide={wide}
+            onToggleWide={() => setWide((w) => !w)}
             activeDay={activeDay}
             onDayChange={(d) => { setActiveDay(d); stopReplay(); }}
             highlightMin={litMin}

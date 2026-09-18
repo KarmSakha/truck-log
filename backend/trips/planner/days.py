@@ -23,17 +23,8 @@ def build_day_logs(plan, start_date, cycle_used_minutes):
     days = []
     n_days = plan.days
 
-    # Day-level on-duty minutes (for recap) and restart completion times.
+    # Restart completion times (for the recap windows).
     restart_ends = [e.end for e in plan.events if e.kind == "restart_sb"]
-    on_duty_by_day = [0] * n_days
-    for ev in plan.events:
-        if ev.status not in ON_DUTY:
-            continue
-        for d in range(n_days):
-            s, e = d * DAY, (d + 1) * DAY
-            ov = min(ev.end, e) - max(ev.start, s)
-            if ov > 0:
-                on_duty_by_day[d] += ov
 
     stops_by_id = {s.id: s for s in plan.stops}
 
@@ -99,20 +90,27 @@ def build_day_logs(plan, start_date, cycle_used_minutes):
         segments.sort(key=lambda s: s["start_min"])
         remarks.sort(key=lambda r: r["time_min"])
 
-        # --- recap ---
-        end_of_day = day_end
-        last_restart_end = max((r for r in restart_ends if r <= end_of_day),
+        # --- recap (70 hr / 8 day column, labeled as on the paper form) ---
+        last_restart_end = max((r for r in restart_ends if r <= day_end),
                                default=None)
-        if last_restart_end is not None:
-            win = sum(
-                min(e.end, end_of_day) - max(e.start, last_restart_end)
-                for e in plan.events
-                if e.status in ON_DUTY and e.end > last_restart_end
-            )
-        else:
-            win = cycle_used_minutes + sum(on_duty_by_day[: d + 1])
-        a = round(win / 60.0, 2)
-        on_today = round(on_duty_by_day[d] / 60.0, 2)
+
+        def window_on_duty(n):
+            """On-duty minutes in the last n days including today.
+
+            A 34-hr restart inside the window zeroes everything before it.
+            Otherwise the prior cycle hours count in full while the window
+            reaches back before the trip: their day-by-day split is unknown,
+            so this errs conservative.
+            """
+            start = day_end - n * DAY
+            if last_restart_end is not None and last_restart_end > start:
+                return _on_duty_between(plan, last_restart_end, day_end)
+            prior = cycle_used_minutes if start < 0 else 0
+            return prior + _on_duty_between(plan, start, day_end)
+
+        a = round(window_on_duty(7) / 60.0, 2)
+        c = round(window_on_duty(5) / 60.0, 2)
+        on_today = round(_on_duty_between(plan, day_start, day_end) / 60.0, 2)
 
         # from/to: city of the stop containing day bounds (fallback: ends)
         from_loc = _loc_at(plan, day_start, fallback="first")
@@ -140,10 +138,19 @@ def build_day_logs(plan, start_date, cycle_used_minutes):
                 "on_duty_today": on_today,
                 "a": a,
                 "b": round(max(0.0, 70.0 - a), 2),
-                "c": a,
+                "c": c,
             },
         })
     return days
+
+
+def _on_duty_between(plan, start, end):
+    """On-duty (driving + on-duty-not-driving) minutes inside [start, end)."""
+    return sum(
+        max(0, min(e.end, end) - max(e.start, start))
+        for e in plan.events
+        if e.status in ON_DUTY
+    )
 
 
 def _stop_at(plan, t):
