@@ -73,7 +73,23 @@ export default function RouteMap({
     });
     ro.observe(el.current);
 
-    return () => { ro.disconnect(); m.remove(); map.current = null; };
+    // When map and log stack into one scrolling page, a plain wheel or
+    // one-finger drag should scroll the page, not zoom/pan the map (⌘/Ctrl +
+    // scroll or two fingers still work). Side by side, the map keeps them.
+    const stacked = window.matchMedia("(max-width: 720px)");
+    const syncGestures = () => {
+      if (stacked.matches) m.cooperativeGestures.enable();
+      else m.cooperativeGestures.disable();
+    };
+    syncGestures();
+    stacked.addEventListener("change", syncGestures);
+
+    return () => {
+      stacked.removeEventListener("change", syncGestures);
+      ro.disconnect();
+      m.remove();
+      map.current = null;
+    };
   }, []);
 
   /* ------- paint route + markers when a trip arrives ------- */

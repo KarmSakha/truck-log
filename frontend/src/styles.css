@@ -968,6 +968,15 @@ input { font-family: inherit; }
   padding: 0;
 }
 .map-fit:hover { color: var(--amber-200); border-color: var(--amber-400); }
+/* MapLibre's "use ⌘ + scroll / two fingers" hint, in the app's type */
+.maplibregl-cooperative-gesture-screen {
+  background: rgba(7, 11, 20, 0.62);
+  font-family: var(--condensed);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
 .stop-marker:focus-visible { outline: 2px solid var(--amber-400); outline-offset: 4px; border-radius: 4px; }
 
 /* day summary + itinerary under the sheet */
