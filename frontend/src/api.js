@@ -29,6 +29,7 @@ export async function geocodeSearch(q, signal) {
     `${API_BASE}/api/geocode/?q=${encodeURIComponent(q)}`,
     { signal }
   );
-  if (!r.ok) return { results: [] };
+  // a failed search must not look like "no matches" (or an endless spinner)
+  if (!r.ok) throw new Error("Place search is unavailable");
   return r.json();
 }

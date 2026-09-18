@@ -49,14 +49,17 @@ export const STATUS_META = {
   ON: { label: "On duty (not driving)", color: "#c45c26", row: 3 },
 };
 
+/* fill = marker badge colour; tone = the same hue lifted for text on the
+   dark UI (>= 4.5:1 on --night-900). Pickup green / delivery coral follow
+   Spotter's driver-app convention. */
 export const STOP_KIND_META = {
-  start: { glyph: "diamond", label: "Current" },
-  pre_trip: { glyph: "clipboard", label: "Pre-trip" },
-  pickup: { glyph: "P", label: "Pickup" },
-  dropoff: { glyph: "D", label: "Dropoff" },
-  fuel: { glyph: "fuel", label: "Fuel" },
-  break: { glyph: "pause", label: "30-min break" },
-  rest: { glyph: "berth", label: "10-hr rest" },
-  restart_34: { glyph: "restart", label: "34-hr restart" },
-  post_trip: { glyph: "clipboard", label: "Post-trip" },
+  start: { glyph: "here", label: "Current", fill: "#40e0d0", tone: "#7ee8dc" },
+  pre_trip: { glyph: "clipboard", label: "Pre-trip", fill: "#475569", tone: "#aab4c3" },
+  pickup: { glyph: "P", label: "Pickup", fill: "#10b981", tone: "#34d399" },
+  dropoff: { glyph: "D", label: "Dropoff", fill: "#f84960", tone: "#ff7a8a" },
+  fuel: { glyph: "fuel", label: "Fuel", fill: "#f08a24", tone: "#f5a54f" },
+  break: { glyph: "pause", label: "30-min break", fill: "#64748b", tone: "#aab4c3" },
+  rest: { glyph: "berth", label: "10-hr rest", fill: "#6e7aa8", tone: "#a3add6" },
+  restart_34: { glyph: "restart", label: "34-hr restart", fill: "#b42318", tone: "#ff7a8a" },
+  post_trip: { glyph: "clipboard", label: "Post-trip", fill: "#475569", tone: "#aab4c3" },
 };

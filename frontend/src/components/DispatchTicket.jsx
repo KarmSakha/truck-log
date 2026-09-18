@@ -12,7 +12,8 @@ const TZONES = [
 ];
 
 function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoFocus }) {
-  const [items, setItems] = useState(null); // null=closed, []=loading
+  const [items, setItems] = useState([]);
+  const [status, setStatus] = useState("idle"); // idle|loading|done|error
   const [active, setActive] = useState(-1);
   const [open, setOpen] = useState(false);
   const box = useRef(null);
@@ -27,10 +28,12 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
+  const close = () => { setStatus("idle"); setOpen(false); };
+
   const search = (q) => {
     clearTimeout(deb.current);
-    if (q.trim().length < 3) { setItems(null); return; }
-    setItems([]);
+    if (q.trim().length < 3) { abort.current?.abort(); setStatus("idle"); return; }
+    setStatus("loading");
     deb.current = setTimeout(async () => {
       abort.current?.abort();
       const ac = new AbortController();
@@ -38,8 +41,10 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
       try {
         const r = await geocodeSearch(q, ac.signal);
         setItems(r.results || []);
+        setStatus("done");
       } catch {
-        if (!ac.signal.aborted) setItems([]);
+        // a failed search is not "no matches": say so, and let them plan anyway
+        if (!ac.signal.aborted) { setItems([]); setStatus("error"); }
       }
     }, 240);
   };
@@ -49,13 +54,13 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
       ? `${item.city}${item.state ? ", " + item.state : ""}`
       : item.label.split(",").slice(0, 2).join(",");
     onChange(short);
-    setItems(null);
-    setOpen(false);
+    close();
   };
+  const shown = status === "done" ? items : [];
 
   return (
     <div className={`geo-field ${error ? "error" : ""}`} ref={box}>
-      <span className={`geo-node ${node} ${items !== null ? "pulse" : ""}`} />
+      <span className={`geo-node ${node} ${status === "loading" ? "pulse" : ""}`} />
       <label htmlFor={geoKey}>{label}</label>
       <input
         id={geoKey}
@@ -63,7 +68,7 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
         autoFocus={autoFocus}
         autoComplete="off"
         placeholder="City, ST"
-        aria-expanded={open && items !== null}
+        aria-expanded={open && status !== "idle"}
         aria-autocomplete="list"
         role="combobox"
         onChange={(e) => {
@@ -74,32 +79,42 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
           search(e.target.value);
         }}
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown" && items?.length) {
+          if (e.key === "ArrowDown" && shown.length) {
             e.preventDefault();
-            setActive((a) => Math.min(a + 1, items.length - 1));
-          } else if (e.key === "ArrowUp" && items?.length) {
+            setActive((a) => Math.min(a + 1, shown.length - 1));
+          } else if (e.key === "ArrowUp" && shown.length) {
             e.preventDefault();
             setActive((a) => Math.max(a - 1, 0));
-          } else if (e.key === "Enter" && active >= 0 && items?.[active]) {
+          } else if (e.key === "Enter" && active >= 0 && shown[active]) {
             e.preventDefault();
             e.stopPropagation();
-            pick(items[active]);
+            pick(shown[active]);
           } else if (e.key === "Escape") {
-            setItems(null);
-            setOpen(false);
+            close();
           }
         }}
         onFocus={() => { if (value.trim().length >= 3) { setOpen(true); search(value); } }}
       />
       {error && <div className="field-error">{error}</div>}
-      {open && items !== null && (
-        <div className="ac-list" role="listbox">
-          {items.length === 0 && (
+      {open && status !== "idle" && (
+        <div className="ac-list" role="listbox" aria-busy={status === "loading"}>
+          {status === "loading" && (
             <div className="ac-skel" aria-hidden="true">
               <div /><div /><div />
             </div>
           )}
-          {items.map((it, i) => (
+          {status === "done" && items.length === 0 && (
+            <div className="ac-msg" role="status">
+              No US city matches — keep typing, or enter City, ST
+            </div>
+          )}
+          {status === "error" && (
+            <div className="ac-msg warn" role="status">
+              Place search is unavailable right now. Type City, ST — it's
+              looked up when you plan.
+            </div>
+          )}
+          {shown.map((it, i) => (
             <button
               key={i}
               type="button"
@@ -113,10 +128,8 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
               <span className="ac-state">{it.state || ""}</span>
             </button>
           ))}
-          {items.length > 0 && items.every((it) => !it.city) && (
-            <div className="ac-item" style={{ cursor: "default", opacity: 0.6 }}>
-              No city match — try City, ST
-            </div>
+          {shown.length > 0 && shown.every((it) => !it.city) && (
+            <div className="ac-msg">No city match — try City, ST</div>
           )}
         </div>
       )}
@@ -276,7 +289,10 @@ export default function DispatchTicket({
           )}
 
           <details>
-            <summary>optional · start 06:00 · Chicago TZ · carrier / driver / load</summary>
+            <summary>
+              <span className="sum-long">optional · start 06:00 · Chicago TZ · carrier / driver / load</span>
+              <span className="sum-short">Options</span>
+            </summary>
             <div className="opt-grid">
               <div>
                 <label htmlFor="o-start">Start time</label>

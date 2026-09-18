@@ -37,7 +37,10 @@ const HOUR_LABELS = [
   "noon", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "Midnight",
 ];
 
-/* recap boxes, worded exactly as on the paper form (day counts included) */
+/* Recap boxes in the standard 70/8 + 60/7 wording. The supplied blank
+   misprints two day counts (70/8 "C ... last 5 days", 60/7 "A ... last 8
+   days"); the rule-consistent counts are C = the whole cycle window and
+   A = one day less, which is what the recap arithmetic uses. */
 const RECAP_BOX_W = 158;
 const RECAP_GAP = 10;
 const RECAP_GROUP_W = 3 * RECAP_BOX_W + 2 * RECAP_GAP; // 494
@@ -48,13 +51,13 @@ const RECAP_GROUPS = [
     boxes: [
       ["A. TOTAL HOURS ON DUTY", "LAST 7 DAYS INCLUDING TODAY."],
       ["B. TOTAL HOURS AVAILABLE", "TOMORROW 70 HR. MINUS A*"],
-      ["C. TOTAL HOURS ON DUTY", "LAST 5 DAYS INCLUDING TODAY."],
+      ["C. TOTAL HOURS ON DUTY", "LAST 8 DAYS INCLUDING TODAY."],
     ],
   },
   {
     title: "60 HOUR / 7 DAY DRIVERS", x: W - M - RECAP_GROUP_W, values: null,
     boxes: [
-      ["A. TOTAL HOURS ON DUTY", "LAST 8 DAYS INCLUDING TODAY."],
+      ["A. TOTAL HOURS ON DUTY", "LAST 6 DAYS INCLUDING TODAY."],
       ["B. TOTAL HOURS AVAILABLE", "TOMORROW 60 HR. MINUS A*"],
       ["C. TOTAL HOURS ON DUTY", "LAST 7 DAYS INCLUDING TODAY."],
     ],
@@ -155,7 +158,7 @@ function FillLine({ x1, x2, y, label, value, labelBelow = false }) {
     <g>
       <line x1={x1} y1={y} x2={x2} y2={y} stroke={FORM_LINE} strokeWidth="1.2" />
       <text x={x1 + 2} y={labelBelow ? y + 13 : y - 4} fontSize="9.5" fill={FORM_TXT}
-        fontFamily="var(--condensed)" letterSpacing="0.04em">
+        fontFamily="var(--form)" letterSpacing="0.04em">
         {label}
       </text>
       {value && (
@@ -170,8 +173,9 @@ function FillLine({ x1, x2, y, label, value, labelBelow = false }) {
 
 /* ============================ the sheet ============================ */
 
-export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = null, onSegmentHover }) {
-  const ip = Math.max(0, Math.min(1, inkProgress));
+export default function LogSheet({
+  log, meta, inkProgress = 1, inkMinute = null, highlightMin = null, onSegmentHover,
+}) {
 
   /* ---- ink polyline: vertices + cumulative length ---- */
   const { path, vertices, cumLens, remarkDoneAt, totalLen } = useMemo(() => {
@@ -204,7 +208,24 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
     return { path: d, vertices: verts, cumLens: cum, remarkDoneAt: rDone, totalLen: len };
   }, [log]);
 
-  const drawnLen = ip * totalLen;
+  // Replay passes the clock (inkMinute): draw the pen to that time, taking
+  // every vertical duty change at or before it — the same clock that moves
+  // the truck on the map. Otherwise inkProgress is a share of path length.
+  let drawnLen;
+  if (inkMinute != null) {
+    const X = xOf(Math.max(0, Math.min(1440, inkMinute)));
+    drawnLen = 0;
+    for (let i = 1; i < vertices.length; i++) {
+      const ax = vertices[i - 1][0];
+      const bx = vertices[i][0];
+      if (bx <= X) { drawnLen = cumLens[i]; continue; }
+      if (ax < X) drawnLen = cumLens[i - 1] + (X - ax);
+      break;
+    }
+  } else {
+    drawnLen = Math.max(0, Math.min(1, inkProgress)) * totalLen;
+  }
+  const ip = totalLen ? drawnLen / totalLen : 1;
 
   /* Remarks share one top line and are spread sideways: parallel diagonals
      never cross once they are REMARK_GAP apart. Each is then shrunk to fit
@@ -250,14 +271,14 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
     <>
     <svg viewBox={`0 0 ${W} ${H}`} role="img"
       aria-label={`Driver's daily log for ${log.date}`}
-      fontFamily="var(--sans)">
+      fontFamily="var(--form-body)">
       {/* ============ HEADER ============ */}
       <text x={M} y={52} fontSize="27" fontWeight="700"
-        fontFamily="var(--condensed)" letterSpacing="0.1em" fill={FORM_TXT}>
+        fontFamily="var(--form)" letterSpacing="0.1em" fill={FORM_TXT}>
         DRIVER&apos;S DAILY LOG
       </text>
       <text x={M + 2} y={74} fontSize="12" fill={FORM_TXT}
-        fontFamily="var(--condensed)" letterSpacing="0.06em">
+        fontFamily="var(--form)" letterSpacing="0.06em">
         (24 HOURS)
       </text>
 
@@ -268,7 +289,7 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
             <g key={lbl}>
               <DigitBoxes x={x} y={30} value={v} boxes={2} boxW={26} boxH={30} />
               <text x={x + 28} y={72} fontSize="9" fill={FORM_TXT}
-                fontFamily="var(--condensed)" letterSpacing="0.06em">
+                fontFamily="var(--form)" letterSpacing="0.06em">
                 {lbl}
               </text>
             </g>
@@ -281,21 +302,21 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
         <rect x={W - M - 330} y={26} width={330} height={40}
           fill="none" stroke={FORM_LINE} strokeWidth="1" />
         <text x={W - M - 322} y={43} fontSize="9.5" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.03em">
+          fontFamily="var(--form)" letterSpacing="0.03em">
           ORIGINAL — FILE AT HOME TERMINAL.
         </text>
         <text x={W - M - 322} y={58} fontSize="9.5" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.03em">
+          fontFamily="var(--form)" letterSpacing="0.03em">
           DUPLICATE — DRIVER RETAINS IN POSSESSION FOR 8 DAYS.
         </text>
       </g>
 
       {/* from / to */}
       <FillLine x1={M + 40} x2={M + 300} y={116} label="" value={log.from} />
-      <text x={M} y={116} fontSize="11" fill={FORM_TXT} fontFamily="var(--condensed)"
+      <text x={M} y={116} fontSize="11" fill={FORM_TXT} fontFamily="var(--form)"
         letterSpacing="0.05em" fontWeight="600">FROM</text>
       <FillLine x1={M + 330} x2={M + 560} y={116} label="" value={log.to} />
-      <text x={M + 304} y={116} fontSize="11" fill={FORM_TXT} fontFamily="var(--condensed)"
+      <text x={M + 304} y={116} fontSize="11" fill={FORM_TXT} fontFamily="var(--form)"
         letterSpacing="0.05em" fontWeight="600">TO</text>
 
       {/* right column fields */}
@@ -306,12 +327,12 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
       {/* miles + truck line */}
       <g>
         <text x={M} y={156} fontSize="10" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.04em">
+          fontFamily="var(--form)" letterSpacing="0.04em">
           TOTAL MILES DRIVING TODAY
         </text>
         <DigitBoxes x={M + 168} y={134} value={log.miles_driving} boxes={3} />
         <text x={M + 280} y={156} fontSize="10" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.04em">
+          fontFamily="var(--form)" letterSpacing="0.04em">
           TOTAL MILEAGE TODAY
         </text>
         <DigitBoxes x={M + 428} y={134} value={String(log.miles_driving).padStart(4, "0")} boxes={4} />
@@ -365,12 +386,12 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
           <g key={h}>
             <text x={GRID_X + h * 40} y={GRID_Y - 7} textAnchor="middle"
               fontSize={t.length > 2 ? 10 : 12.5} fill={FORM_TXT}
-              fontFamily="var(--condensed)" fontWeight="500">
+              fontFamily="var(--form)" fontWeight="500">
               {t}
             </text>
             <text x={GRID_X + h * 40} y={GRID_B + 16} textAnchor="middle"
               fontSize={t.length > 2 ? 10 : 12.5} fill={FORM_TXT}
-              fontFamily="var(--condensed)" fontWeight="500">
+              fontFamily="var(--form)" fontWeight="500">
               {t}
             </text>
           </g>
@@ -384,7 +405,7 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
                 y={GRID_Y + i * ROW_H + ROW_H / 2
                    + (r.label.length - 1) * -7 + j * 15 + 5}
                 textAnchor="end" fontSize="14.5" fontWeight="600"
-                fill={FORM_TXT} fontFamily="var(--condensed)"
+                fill={FORM_TXT} fontFamily="var(--form)"
                 letterSpacing="0.02em">
                 {ln}
               </text>
@@ -397,12 +418,12 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
           fill="none" stroke={FORM_LINE} strokeWidth="1.4" />
         <text x={TOT_X + TOT_W / 2} y={GRID_Y - 30} textAnchor="middle"
           fontSize="11" fontWeight="600" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.06em">
+          fontFamily="var(--form)" letterSpacing="0.06em">
           TOTAL
         </text>
         <text x={TOT_X + TOT_W / 2} y={GRID_Y - 16} textAnchor="middle"
           fontSize="11" fontWeight="600" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.06em">
+          fontFamily="var(--form)" letterSpacing="0.06em">
           HOURS
         </text>
         {totRows.map((r, i) => (
@@ -442,7 +463,7 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
           <rect className="grid-flash"
             x={xOf(Math.floor(highlightMin / 15) * 15)} y={GRID_Y}
             width={10} height={GRID_H}
-            fill="#e8a317" opacity="0.28" />
+            fill="#14b8a6" opacity="0.26" />
         )}
 
         {/* hover layer: grid time -> segment -> map stop */}
@@ -519,11 +540,11 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
           fill="none" stroke={FORM_LINE} strokeWidth="1.2" />
         <rect x={M + 14} y={423} width={86} height={15} fill="var(--paper)" />
         <text x={M + 20} y={434} fontSize="11" fontWeight="600" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.08em">
+          fontFamily="var(--form)" letterSpacing="0.08em">
           REMARKS
         </text>
         <text x={M + 14} y={618} fontSize="9" fill={FORM_TXT} fontStyle="italic"
-          fontFamily="var(--sans)">
+          fontFamily="var(--form-body)">
           Enter name of place you reported and where released from work and when
           and where each change of duty occurred. Use time standard of home terminal.
         </text>
@@ -532,7 +553,7 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
       {/* ============ SHIPPING ============ */}
       <g>
         <text x={M} y={664} fontSize="12" fontWeight="700" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.06em">
+          fontFamily="var(--form)" letterSpacing="0.06em">
           SHIPPING DOCUMENTS:
         </text>
         <FillLine x1={M + 190} x2={640} y={664} label="DVL OR MANIFEST NO."
@@ -544,11 +565,11 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
       {/* ============ RECAP ============ */}
       <g>
         <text x={M} y={712} fontSize="12" fontWeight="700" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.06em">
+          fontFamily="var(--form)" letterSpacing="0.06em">
           RECAP — COMPLETE AT END OF DAY
         </text>
         <text x={W - M} y={712} textAnchor="end" fontSize="10" fill={FORM_TXT}
-          fontFamily="var(--condensed)" letterSpacing="0.04em">
+          fontFamily="var(--form)" letterSpacing="0.04em">
           *IF YOU TOOK 34 CONSECUTIVE HOURS OFF DUTY YOU HAVE 60/70 HOURS AVAILABLE
         </text>
 
@@ -559,7 +580,7 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
               fill="none" stroke={FORM_LINE} strokeWidth="1" />
             <text x={g.x + RECAP_GROUP_W / 2} y={740} textAnchor="middle"
               fontSize="11" fontWeight="600" fill={FORM_TXT}
-              fontFamily="var(--condensed)" letterSpacing="0.05em">
+              fontFamily="var(--form)" letterSpacing="0.05em">
               {g.title}
             </text>
           </g>
@@ -589,7 +610,7 @@ export default function LogSheet({ log, meta, inkProgress = 1, highlightMin = nu
             )}
             {b.lbl.map((ln, j) => (
               <text key={j} x={b.x + 2} y={808 + j * 13} fontSize="9.5"
-                fill={FORM_TXT} fontFamily="var(--condensed)" letterSpacing="0.03em">
+                fill={FORM_TXT} fontFamily="var(--form)" letterSpacing="0.03em">
                 {ln}
               </text>
             ))}

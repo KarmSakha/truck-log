@@ -51,7 +51,7 @@ export default function RouteMap({
       m.addLayer({
         id: "route-loaded", type: "line", source: "route",
         filter: ["==", ["get", "leg"], 1],
-        paint: { "line-color": "#e8a317", "line-width": 3.4, "line-opacity": 0.95 },
+        paint: { "line-color": "#40e0d0", "line-width": 3.6, "line-opacity": 0.95 },
         layout: { "line-cap": "round" },
       });
     });
@@ -167,7 +167,7 @@ export default function RouteMap({
         const halo = document.createElement("div");
         halo.className = "halo";
         halo.style.cssText =
-          "position:absolute;inset:-9px;border:2px solid #e8a317;border-radius:50%;pointer-events:none";
+          "position:absolute;inset:-8px;border:2px solid #40e0d0;border-radius:50%;pointer-events:none";
         node.appendChild(halo);
         const enter = () => { onStopHover?.(s.id); showTip(s, meta); };
         const leave = () => { onStopHover?.(null); hideTip(); };
@@ -198,8 +198,10 @@ export default function RouteMap({
         // built with textContent: place names come from the geocoder
         const t = document.createElement("div");
         t.className = "stop-tip";
+        t.style.borderLeftColor = meta.fill;
         const head = document.createElement("div");
         head.className = "tt";
+        head.style.color = meta.tone;
         head.textContent = meta.label;
         const place = [s.city, s.state].filter(Boolean).join(", ");
         const dur = s.duration_min ? ` · ${fmtDur(s.duration_min)}` : "";
@@ -210,8 +212,8 @@ export default function RouteMap({
       function hideTip() { tip.current?.remove(); tip.current = null; }
       function pulse(node) {
         node.animate(
-          [{ boxShadow: "0 0 0 0 rgba(232,163,23,.6)" },
-           { boxShadow: "0 0 0 14px rgba(232,163,23,0)" }],
+          [{ boxShadow: "0 0 0 0 rgba(64,224,208,.6)" },
+           { boxShadow: "0 0 0 14px rgba(64,224,208,0)" }],
           { duration: 700, easing: "ease-out" }
         );
       }

@@ -15,12 +15,16 @@ planning and explanation.
 
 ## What it does
 
-- **Geocoding + routing** — Nominatim forward/reverse geocoding (Photon
-  fallback) and OSRM driving directions for `current → pickup → dropoff`.
+- **Geocoding + routing** — Nominatim for the one forward lookup per place on
+  submit and for reverse lookups (Photon fallback), Photon for search-as-you-
+  type (Nominatim's policy forbids autocomplete), a cross-worker rate limit,
+  and OSRM driving directions for `current → pickup → dropoff`. A driver who
+  is already at the pickup gets no deadhead leg.
 - **HOS planner** — a pure-Python engine that enforces:
   - 11-hour driving limit within a shift
   - 14-hour elapsed driving window
-  - 30-minute break after 8 hours of driving
+  - 30-minute break after 8 hours of driving — any 30 consecutive
+    non-driving minutes count (a 1-hour pickup or a 30-minute fuel stop)
   - 70-hour/8-day cycle limit, with a 34-hour restart when the cycle is spent
   - Fuel stop every 1,000 route miles (30 min ON duty)
   - Pickup & dropoff: 1 hour ON duty each
@@ -31,13 +35,18 @@ planning and explanation.
   hour grid at 15-minute resolution, one continuous black-ink step line with
   red vertex dots, U-shaped brackets under stationary ON periods, diagonal
   remarks (city, state + activity), header fields, shipping block, miles, four
-  line totals plus the `24:00` day total, a 70h/60h recap table, and the
+  line totals plus the `24:00` day total, a 70h/60h recap table (A = last 7
+  days, B = 70 − A, C = last 8 days; the supplied blank misprints two of the
+  day counts), driver signature and co-driver lines, and the
   circled on-duty decimal — all drawn in a hand-written style and animated as
   if being penned.
-- **The desk** — a dark dispatch UI: itinerary spine form with autocomplete, a
-  cycle-hours tank, HOS gauges (11h / 14h / 70h), a night map with the route
-  and custom stop glyphs, day tabs, map↔log linked highlighting, and a replay
-  that re-pens the day's line in sync with a truck moving along the route.
+- **The desk** — a dark dispatch UI styled on Spotter's system (teal /
+  turquoise, coral, DM Sans): itinerary form with autocomplete, a cycle-hours
+  tank, HOS clocks at drop (11h / 14h / 70h), a night map with round stop
+  badges (pickup green, delivery coral), a trip-progress strip, day tabs, a
+  per-day stop list linked to the map and grid, and a replay that re-pens the
+  day's line on the same clock that moves the truck. On phones the sheet can
+  be zoomed to a readable width and panned.
 
 ## API
 
@@ -132,7 +141,8 @@ Frontend environment variables:
 - **Prior cycle hours are a lump.** The input is one number, not a per-day
   history, so the planner treats it conservatively: those hours never "age
   off" during the generated trip. A 34-hour restart is only inserted when the
-  cycle is actually exhausted.
+  cycle is actually exhausted. Hours used are rounded *up* to the next 15
+  minutes, so 70 real hours are never exceeded.
 - **Home-terminal time.** Every sheet uses the driver's home-terminal time
   zone (default `America/Chicago`), matching the paper form's instruction.
 - **15-minute ink.** All status changes snap to the quarter-hour, like pen on

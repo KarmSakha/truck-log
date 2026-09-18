@@ -43,12 +43,12 @@ function DayItinerary({ log, day, stops, litStop, onItemHover, onItemPick }) {
           title="Show on map"
         >
           <span className="it-time">
-            {cont ? "cont." : fmtClock(s.start_min - dayStart)}
+            <span className="it-pill">{cont ? "cont." : fmtClock(s.start_min - dayStart)}</span>
           </span>
           <span className="it-glyph" aria-hidden="true"
             dangerouslySetInnerHTML={{ __html: stopGlyph(s.type) }} />
           <span className="it-main">
-            <span className="it-kind">{meta.label}</span>
+            <span className="it-kind" style={{ color: meta.tone }}>{meta.label}</span>
             <span className="it-place">{place || "—"}</span>
           </span>
           <span className="it-dur">
@@ -95,6 +95,7 @@ export default function LogBook({
 
   const [ink, setInk] = useState(reduced ? 1 : 0);
   const [copied, setCopied] = useState(null); // null | "ok" | "fail"
+  const [zoomed, setZoomed] = useState(false);  // phones: readable sheet width
   const raf = useRef(0);
   const tabsRef = useRef(null);
 
@@ -130,11 +131,6 @@ export default function LogBook({
     const t = setTimeout(() => setCopied(null), 1600);
     return () => clearTimeout(t);
   }, [copied]);
-
-  // during replay: ink follows the replay clock
-  const inkNow = replaying
-    ? Math.min(1, Math.max(0, replayTime / DAY))
-    : ink;
 
   const go = (d) => onDayChange(Math.min(logs.length - 1, Math.max(0, d)));
   const log = logs[activeDay];
@@ -209,6 +205,13 @@ export default function LogBook({
             <span aria-hidden="true">⎙</span>
             <span className="mb-label">Print</span>
           </button>
+          <button type="button" className="mini-btn zoom-toggle"
+            onClick={() => setZoomed((z) => !z)} aria-pressed={zoomed}
+            title={zoomed ? "Fit the sheet to the screen" : "Zoom the sheet to read it"}
+            aria-label={zoomed ? "Fit log sheet to screen" : "Zoom log sheet"}>
+            <span aria-hidden="true">{zoomed ? "⊖" : "⊕"}</span>
+            <span className="mb-label">{zoomed ? "Fit" : "Zoom"}</span>
+          </button>
           <button type="button" className="mini-btn wide-toggle" onClick={onToggleWide}
             aria-pressed={wide}
             title={wide ? "Back to map + log" : "Give the log more room"}
@@ -220,6 +223,8 @@ export default function LogBook({
       </div>
 
       <div className="logbook-scroll">
+        <div className={`sheet-viewport ${zoomed ? "zoomed" : ""}`}>
+        {zoomed && <p className="zoom-hint" aria-hidden="true">Swipe sideways to read the whole sheet</p>}
         <div className="sheet-stack">
           {logs.length > 1 && <div className="peek-sheet" aria-hidden="true" />}
           {logs.map((l, i) => (
@@ -233,12 +238,14 @@ export default function LogBook({
               <LogSheet
                 log={l}
                 meta={meta}
-                inkProgress={i === activeDay ? inkNow : 1}
+                inkProgress={i === activeDay ? ink : 1}
+                inkMinute={i === activeDay && replaying ? replayTime : null}
                 highlightMin={i === activeDay ? highlightMin : null}
                 onSegmentHover={i === activeDay ? onSegmentHover : null}
               />
             </div>
           ))}
+        </div>
         </div>
 
         <DayItinerary

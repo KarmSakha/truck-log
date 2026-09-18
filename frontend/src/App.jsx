@@ -3,6 +3,7 @@ import DispatchTicket from "./components/DispatchTicket.jsx";
 import Gauges from "./components/Gauges.jsx";
 import LogBook from "./components/LogBook.jsx";
 import RouteMap from "./components/RouteMap.jsx";
+import TripStrip from "./components/TripStrip.jsx";
 import { fetchTrip, planTrip } from "./api.js";
 import { fmtClock, fmtWeekday } from "./format.js";
 
@@ -19,6 +20,8 @@ const EMPTY = {
   carrier: "", driver: "", coDriver: "",
   tractor: "", trailer: "", shipper: "", commodity: "",
 };
+
+const INLINE_FIELDS = new Set(["current_location", "pickup_location", "dropoff_location"]);
 
 /* cumulative haversine miles over the route geometry */
 function cumMiles(geometry) {
@@ -124,6 +127,10 @@ export default function App() {
     if (!vals.dropoff.trim()) e.dropoff_location = "Dropoff is required";
     setErrors(e);
     if (Object.keys(e).length) return;
+    if (vals.startTime && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(vals.startTime.trim())) {
+      setToast("Start time must be HH:MM (00:00–23:59)");
+      return;
+    }
 
     setPlanning(true);
     setToast(null);
@@ -153,7 +160,9 @@ export default function App() {
       setRevealKey((k) => k + 1);
       if (t.id) window.history.pushState({}, "", `/trips/${t.id}/`);
     } catch (err) {
-      if (err.field && err.field !== "route" && err.field !== "body") {
+      // only the three places have inline slots; anything else (start
+      // time, time zone, cycle) goes to the visible message line
+      if (INLINE_FIELDS.has(err.field)) {
         setErrors({ [err.field]: err.message });
       } else {
         setToast(err.message || "Route service is down");
@@ -202,13 +211,30 @@ export default function App() {
   const onItemHover = useCallback((s) => {
     if (!s) { setLitStop(null); setLitMin(null); return; }
     setLitStop(s.id);
-    setLitMin(Math.max(0, s.start_min - activeDay * 1440));
+    const d0 = activeDay * 1440;
+    const onDay = s.end_min > d0 && s.start_min < d0 + 1440;
+    setLitMin(onDay ? Math.max(0, s.start_min - d0) : null);
   }, [activeDay]);
 
   const onItemPick = useCallback((s) => {
     onItemHover(s);
     if (s.lat != null) setMapFocus({ lat: s.lat, lng: s.lng });
   }, [onItemHover]);
+
+  // trip strip: a dot can be on any day, so picking one opens that day
+  const onStripPick = useCallback((s) => {
+    onStopClick(s);
+    setLitStop(s.id);
+    if (s.lat != null) setMapFocus({ lat: s.lat, lng: s.lng });
+  }, [onStopClick]);
+
+  const strip = useMemo(() => {
+    if (!trip || !geo) return null;
+    return {
+      total: trip.route.legs.reduce((a, l) => a + l.miles, 0),
+      dayRange: [geo.timeToMile(activeDay * 1440), geo.timeToMile((activeDay + 1) * 1440)],
+    };
+  }, [trip, geo, activeDay]);
 
   const arrival = useMemo(() => {
     const d = trip?.stops.find((s) => s.type === "dropoff");
@@ -291,6 +317,19 @@ export default function App() {
             revealKey={revealKey}
             focus={mapFocus}
           />
+          {phase === "results" && trip && strip && (
+            <TripStrip
+              stops={trip.stops}
+              totalMiles={strip.total}
+              day={activeDay}
+              dayRange={strip.dayRange}
+              truckMile={replaying && geo
+                ? geo.timeToMile(activeDay * 1440 + replayTime) : null}
+              litStop={litStop}
+              onItemHover={onItemHover}
+              onItemPick={onStripPick}
+            />
+          )}
           {phase === "results" && replaying && (
             <div className="replay-bar">
               <button type="button" className="mini-btn" onClick={stopReplay}
