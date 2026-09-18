@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import LogSheet from "./LogSheet.jsx";
 import {
   fmtClock, fmtDateLabel, fmtDur, fmtWeekday, STATUS_META, STOP_KIND_META,
@@ -93,6 +94,15 @@ export default function LogBook({
     []
   );
 
+  const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    const before = () => flushSync(() => setPrinting(true));
+    const after = () => setPrinting(false);
+    window.addEventListener("beforeprint", before);
+    window.addEventListener("afterprint", after);
+    return () => { window.removeEventListener("beforeprint", before); window.removeEventListener("afterprint", after); };
+  }, []);
+
   const [ink, setInk] = useState(reduced ? 1 : 0);
   const [copied, setCopied] = useState(null); // null | "ok" | "fail"
   const [zoomed, setZoomed] = useState(false);  // phones: readable sheet width
@@ -101,8 +111,7 @@ export default function LogBook({
 
   // first-load ink draw for the active sheet
   useEffect(() => {
-    if (replaying || reduced) { setInk(1); return; }
-    setInk(0);
+    if (replaying || reduced) return;
     const t0 = performance.now();
     const dur = 1150;
     const tick = (now) => {
@@ -137,7 +146,8 @@ export default function LogBook({
   const t = log.totals;
 
   return (
-    <div className="logbook-pane">
+    <div className="logbook-pane" id="daily-logs">
+      <div className="logbook-title"><div><span className="eyebrow">YOUR TRIP, ON PAPER</span><h1>Daily logbook</h1></div><span className="sheet-count">{activeDay + 1} / {logs.length} <span>sheets</span></span></div>
       <div className="logbook-head">
         <div className="day-nav">
           <button type="button" className="nav-btn" onClick={() => go(activeDay - 1)}
@@ -223,6 +233,8 @@ export default function LogBook({
       </div>
 
       <div className="logbook-scroll">
+        <div className="day-overview"><div><span className="eyebrow">{fmtWeekday(log.date)}</span><h2>{log.from} <span>→</span> {log.to}</h2></div><span className="day-total">24h <span>accounted for</span></span></div>
+        <p className="sheet-help">Read your duty changes below. Select a stop to locate it on the map.</p>
         <div className={`sheet-viewport ${zoomed ? "zoomed" : ""}`}>
         {zoomed && <p className="zoom-hint" aria-hidden="true">Swipe sideways to read the whole sheet</p>}
         <div className="sheet-stack">
@@ -238,8 +250,8 @@ export default function LogBook({
               <LogSheet
                 log={l}
                 meta={meta}
-                inkProgress={i === activeDay ? ink : 1}
-                inkMinute={i === activeDay && replaying ? replayTime : null}
+                inkProgress={!printing && i === activeDay && !reduced && !replaying ? ink : 1}
+                inkMinute={!printing && i === activeDay && replaying ? replayTime : null}
                 highlightMin={i === activeDay ? highlightMin : null}
                 onSegmentHover={i === activeDay ? onSegmentHover : null}
               />

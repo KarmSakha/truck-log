@@ -25,13 +25,14 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
       if (!box.current?.contains(e.target)) setOpen(false);
     };
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    return () => { document.removeEventListener("mousedown", close); clearTimeout(deb.current); abort.current?.abort(); };
   }, []);
 
   const close = () => { setStatus("idle"); setOpen(false); };
 
   const search = (q) => {
     clearTimeout(deb.current);
+    abort.current?.abort();
     if (q.trim().length < 3) { abort.current?.abort(); setStatus("idle"); return; }
     setStatus("loading");
     deb.current = setTimeout(async () => {
@@ -70,6 +71,10 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
         placeholder="City, ST"
         aria-expanded={open && status !== "idle"}
         aria-autocomplete="list"
+        aria-controls={`${geoKey}-list`}
+        aria-activedescendant={open && active >= 0 && shown[active] ? `${geoKey}-option-${active}` : undefined}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? `${geoKey}-error` : undefined}
         role="combobox"
         onChange={(e) => {
           onChange(e.target.value);
@@ -95,9 +100,9 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
         }}
         onFocus={() => { if (value.trim().length >= 3) { setOpen(true); search(value); } }}
       />
-      {error && <div className="field-error">{error}</div>}
+      {error && <div className="field-error" id={`${geoKey}-error`} role="alert">{error}</div>}
       {open && status !== "idle" && (
-        <div className="ac-list" role="listbox" aria-busy={status === "loading"}>
+        <div id={`${geoKey}-list`} className="ac-list" role="listbox" aria-label={`${label} suggestions`} aria-busy={status === "loading"}>
           {status === "loading" && (
             <div className="ac-skel" aria-hidden="true">
               <div /><div /><div />
@@ -117,6 +122,9 @@ function GeoField({ label, node, value, onChange, onTyping, error, geoKey, autoF
           {shown.map((it, i) => (
             <button
               key={i}
+              id={`${geoKey}-option-${i}`}
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
               type="button"
               role="option"
               aria-selected={i === active}
@@ -218,10 +226,10 @@ export default function DispatchTicket({
           <div className="cycle-chip">70H / 8D · PROPERTY</div>
         </div>
         <p className="tagline">
-          Plan an HOS-legal route, then get every daily log sheet drawn and
-          filled in — one per day, ready to print.
+          Your next trip. Every hour accounted for.
         </p>
 
+        {phase === "landing" && <p className="ticket-intro">Plan your route, see when to stop, and leave with a daily log for every day on the road.</p>}
         <div className="ticket-body">
           <div className="spine">
             <GeoField geoKey="f-current" label="Current" node="diamond"
@@ -258,17 +266,17 @@ export default function DispatchTicket({
               <span className={`cta-ico ${planning ? "spin" : ""}`} aria-hidden="true">
                 {planning ? "◌" : phase === "results" ? "↻" : "→"}
               </span>
-              {planning ? "Plotting HOS…" : phase === "results" ? "Replan" : "Draw the logs"}
+              {planning ? "Plotting HOS…" : phase === "results" ? "Replan" : "Plan trip & draw logs"}
             </button>
             <button className="btn-text" type="button" onClick={onSample}
               disabled={planning}>
-              Load sample
+              Try a sample trip
             </button>
           </div>
 
           {planning && (
             <div className="planning-steps" aria-live="polite">
-              {["Geocoding", "Routing", "Drawing logs"].map((s, i) => (
+              {["Finding places", "Planning stops", "Preparing your logs"].map((s, i) => (
                 <span key={s}
                   className={`st ${planStep === i ? "on" : planStep > i ? "done" : ""}`}>
                   {s}
@@ -290,13 +298,13 @@ export default function DispatchTicket({
 
           <details>
             <summary>
-              <span className="sum-long">optional · start 06:00 · Chicago TZ · carrier / driver / load</span>
+              <span className="sum-long">Trip settings · {v.startTime || "06:00"} · {TZONES.find(([z]) => z === v.tz)?.[1] || v.tz}</span>
               <span className="sum-short">Options</span>
             </summary>
             <div className="opt-grid">
               <div>
                 <label htmlFor="o-start">Start time</label>
-                <input id="o-start" value={v.startTime}
+                <input id="o-start" inputMode="numeric" maxLength={5} value={v.startTime}
                   onChange={(e) => set("startTime")(e.target.value)}
                   placeholder="06:00" />
               </div>
@@ -351,9 +359,17 @@ export default function DispatchTicket({
                   onChange={(e) => set("commodity")(e.target.value)}
                   placeholder="N/A" />
               </div>
+              {[["manifest", "Manifest / load number"], ["homeTerminal", "Home terminal address"], ["mainOffice", "Carrier office address"]].map(([key, label]) => (
+                <div className="span2" key={key}>
+                  <label htmlFor={`o-${key}`}>{label}</label>
+                  <input id={`o-${key}`} value={v[key] || ""} maxLength={80}
+                    onChange={(e) => set(key)(e.target.value)} placeholder="Optional" />
+                </div>
+              ))}
             </div>
           </details>
         </div>
+        {phase === "landing" && <div className="ticket-foot"><span>70-hour / 8-day cycle</span><span>Fuel & rest included</span><span>Printable daily logs</span></div>}
       </form>
     </div>
   );

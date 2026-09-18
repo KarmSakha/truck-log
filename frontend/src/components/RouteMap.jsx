@@ -6,7 +6,9 @@ import { GLYPHS, stopGlyph } from "../glyphs.js";
 const DARK_STYLE =
   "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
-const PAD = { top: 70, bottom: 70, left: 70, right: 70 };
+const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const PAD = { top: 64, bottom: 48, left: 32, right: 32 };
 
 export default function RouteMap({
   route, stops, litStop, onStopHover, onStopClick,
@@ -21,7 +23,7 @@ export default function RouteMap({
 
   const fitRoute = (duration = 500) => {
     if (map.current && bounds.current) {
-      map.current.fitBounds(bounds.current, { padding: PAD, duration });
+      map.current.fitBounds(bounds.current, { padding: PAD, duration: prefersReducedMotion() ? 0 : duration });
     }
   };
 
@@ -116,14 +118,14 @@ export default function RouteMap({
       bounds.current = b;
       m.resize();
       m.fitBounds(b, { padding: PAD, duration: 0 });
-      setTimeout(() => m.fitBounds(b, { padding: PAD, duration: 500 }), 300);
+      setTimeout(() => m.fitBounds(b, { padding: PAD, duration: prefersReducedMotion() ? 0 : 500 }), 300);
 
       // route paint-on animation (~1.2s)
       const total = coords.length;
       const t0 = performance.now();
-      const dur = 1200;
+      const dur = prefersReducedMotion() ? 0 : 1200;
       const paint = (now) => {
-        const p = Math.min(1, (now - t0) / dur);
+        const p = dur ? Math.min(1, (now - t0) / dur) : 1;
         const n = Math.max(2, Math.floor(total * p));
         const c0 = leg0Coords.slice(0, Math.min(n, leg0Coords.length));
         const c1 = leg1Coords.length
@@ -214,7 +216,7 @@ export default function RouteMap({
         node.animate(
           [{ boxShadow: "0 0 0 0 rgba(64,224,208,.6)" },
            { boxShadow: "0 0 0 14px rgba(64,224,208,0)" }],
-          { duration: 700, easing: "ease-out" }
+          { duration: prefersReducedMotion() ? 0 : 700, easing: "ease-out" }
         );
       }
       } catch (e) { console.error("routemap apply failed", e); }
@@ -238,7 +240,7 @@ export default function RouteMap({
     m.easeTo({
       center: [focus.lng, focus.lat],
       zoom: Math.max(m.getZoom(), 6.5),
-      duration: 700,
+      duration: prefersReducedMotion() ? 0 : 700,
     });
   }, [focus]);
 

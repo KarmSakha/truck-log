@@ -91,7 +91,7 @@ npm install
 npm run dev                       # http://localhost:5173
 ```
 
-The frontend talks to `VITE_API_URL` (defaults to `http://127.0.0.1:8000`).
+The frontend uses same-origin `/api`; Vite proxies it to `http://127.0.0.1:8000` locally. Set `VITE_API_URL` only for a split deployment.
 
 ## Tests
 
@@ -100,7 +100,7 @@ cd backend && source .venv/bin/activate
 python manage.py test trips
 ```
 
-11 tests cover the 11h/14h/30-min/70h/34h/fuel rules, multi-day splits,
+33 backend tests cover the 11h/14h/30-min/70h/34h/fuel rules, multi-day splits,
 per-day totals, and a golden Schneider-style fixture.
 
 ## Configuration
@@ -123,7 +123,7 @@ Frontend environment variables:
 
 | Var | Default |
 |---|---|
-| `VITE_API_URL` | `http://127.0.0.1:8000` |
+| `VITE_API_URL` | empty (same origin) |
 
 ## Deploy
 
@@ -164,3 +164,16 @@ frontend/          React 19 + Vite + MapLibre
 ```
 
 Generated with [Devin](https://devin.ai).
+
+## Submission walkthrough
+
+Repository: https://github.com/KarmSakha/truck-log
+
+Record a 3–5 minute Loom before submitting; no recording is linked yet.
+Suggested sequence: sample trip and map stops (45s), daily log totals and mobile
+zoom (45s), replay/pause/seek and print (30s), planner rules and tests (60s),
+React log renderer and API structure (45s). Include the live URL, repository,
+and recording link in the submission.
+
+Frontend regression checks: `cd frontend && npm test && npm run lint && npm run build`.
+Saved trips restore all optional fields. Replay supports pause, seek, and resume.

@@ -1,33 +1,15 @@
-import { useEffect, useRef, useState } from "react";
 import { fmtDur } from "../format.js";
-
-function useCountUp(target, dur = 700, key) {
-  const [v, setV] = useState(0);
-  const raf = useRef(0);
-  useEffect(() => {
-    const t0 = performance.now();
-    const from = 0;
-    const tick = (now) => {
-      const p = Math.min(1, (now - t0) / dur);
-      setV(from + (target - from) * (1 - Math.pow(1 - p, 3)));
-      if (p < 1) raf.current = requestAnimationFrame(tick);
-    };
-    raf.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf.current);
-  }, [target, key, dur]);
-  return v;
-}
 
 function Gauge({ label, usedMin, maxMin, suffix, fillClass }) {
   const remaining = Math.max(0, maxMin - usedMin);
-  const shown = useCountUp(remaining / 60, 800, usedMin);
+
   const frac = maxMin ? Math.max(0, Math.min(1, usedMin / maxMin)) : 0;
   return (
     <div className={`gauge ${frac > 0.85 ? "warn" : ""}`}>
       <div className="g-label">
         <span>{label}</span>
         <span className="g-value">
-          {shown.toFixed(1)} <small>h left{suffix || ""}</small>
+          {fmtDur(remaining)} <small>left{suffix || ""}</small>
         </span>
       </div>
       <div className="g-bar">
@@ -44,9 +26,9 @@ export default function Gauges({ summary, arrival }) {
   const g = summary?.gauges || {};
   const windowUsed = g.window_elapsed_min ?? 0;
   return (
-    <div className="instruments" role="group" aria-label="HOS clocks at dropoff and trip totals">
+    <div className="instruments" role="group" aria-label="HOS clocks after unloading and post-trip inspection">
       <div className="inst-tag" aria-hidden="true">
-        <span>Clocks</span><span>at drop</span>
+        <span>Clocks</span><span>at finish</span>
       </div>
       <Gauge label="11h driving" usedMin={g.drive_used_min || 0} maxMin={660} />
       <Gauge label="14h window" usedMin={windowUsed} maxMin={840}

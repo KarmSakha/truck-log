@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DispatchTicket from "./components/DispatchTicket.jsx";
 import Gauges from "./components/Gauges.jsx";
 import LogBook from "./components/LogBook.jsx";
-import RouteMap from "./components/RouteMap.jsx";
+const RouteMap = lazy(() => import("./components/RouteMap.jsx"));
+import { EMPTY, valuesFromTrip, replayMinute } from "./tripState.js";
 import TripStrip from "./components/TripStrip.jsx";
 import { fetchTrip, planTrip } from "./api.js";
 import { fmtClock, fmtWeekday } from "./format.js";
@@ -12,13 +13,6 @@ const SAMPLE = {
   pickup: "Dallas, TX",
   dropoff: "Houston, TX",
   cycle: 20,
-};
-
-const EMPTY = {
-  current: "", pickup: "", dropoff: "", cycle: 20,
-  startTime: "", tz: "America/Chicago",
-  carrier: "", driver: "", coDriver: "",
-  tractor: "", trailer: "", shipper: "", commodity: "",
 };
 
 const INLINE_FIELDS = new Set(["current_location", "pickup_location", "dropoff_location"]);
@@ -50,6 +44,9 @@ export default function App() {
   const [litStop, setLitStop] = useState(null); // stop id
   const [litMin, setLitMin] = useState(null);   // grid column to flash
   const [replaying, setReplaying] = useState(false);
+  const [replayPaused, setReplayPaused] = useState(false);
+  const replayAnchor = useRef({ minute: 0, at: 0 });
+  const [loadingTrip, setLoadingTrip] = useState(() => /^\/trips\//.test(window.location.pathname));
   const [replayTime, setReplayTime] = useState(0);
   const [revealKey, setRevealKey] = useState(0);
   const [wide, setWide] = useState(false);       // log pane expanded
@@ -57,25 +54,29 @@ export default function App() {
   const replayRaf = useRef(0);
   const stepTimer = useRef(0);
 
-  /* ---------- shareable URL ---------- */
+  /* Restore the complete editable plan, including browser back/forward. */
   useEffect(() => {
-    const m = window.location.pathname.match(/^\/trips\/([0-9a-f-]{36})\/?$/);
-    if (m) {
-      fetchTrip(m[1])
-        .then((t) => {
-          setTrip(t);
-          setValues((v) => ({
-            ...v,
-            current: t.input.current_location,
-            pickup: t.input.pickup_location,
-            dropoff: t.input.dropoff_location,
-            cycle: t.input.current_cycle_used_hours,
-          }));
-          setPhase("results");
-          setRevealKey((k) => k + 1);
-        })
-        .catch(() => setToast("Couldn't load that trip"));
-    }
+    let generation = 0;
+    const restore = () => {
+      const request = ++generation;
+      const m = window.location.pathname.match(/^\/trips\/([0-9a-f-]{36})\/?$/);
+      cancelAnimationFrame(replayRaf.current);
+      setReplaying(false);
+      if (!m) { setPhase("landing"); setTrip(null); setLoadingTrip(false); return; }
+      setLoadingTrip(true);
+      fetchTrip(m[1]).then((t) => {
+        if (request !== generation) return;
+        setTrip(t); setValues(valuesFromTrip(t)); setActiveDay(0);
+        setPhase("results"); setRevealKey((k) => k + 1); setToast(null);
+      }).catch(() => {
+        if (request !== generation) return;
+        setTrip(null); setPhase("landing");
+        setToast("This saved trip could not be opened. Check the link or plan a new trip.");
+      }).finally(() => { if (request === generation) setLoadingTrip(false); });
+    };
+    restore();
+    window.addEventListener("popstate", restore);
+    return () => { generation++; window.removeEventListener("popstate", restore); };
   }, []);
 
   /* ---------- route position helpers ---------- */
@@ -126,12 +127,17 @@ export default function App() {
     if (!vals.pickup.trim()) e.pickup_location = "Pickup is required";
     if (!vals.dropoff.trim()) e.dropoff_location = "Dropoff is required";
     setErrors(e);
-    if (Object.keys(e).length) return;
+    if (Object.keys(e).length) {
+      document.getElementById({ current_location: "f-current", pickup_location: "f-pickup", dropoff_location: "f-dropoff" }[Object.keys(e)[0]])?.focus();
+      return;
+    }
     if (vals.startTime && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(vals.startTime.trim())) {
       setToast("Start time must be HH:MM (00:00–23:59)");
       return;
     }
 
+    cancelAnimationFrame(replayRaf.current);
+    setReplaying(false);
     setPlanning(true);
     setToast(null);
     setPlanStep(0);
@@ -153,8 +159,13 @@ export default function App() {
         trailer: vals.trailer || undefined,
         shipper: vals.shipper || undefined,
         commodity: vals.commodity || undefined,
+        manifest: vals.manifest || undefined,
+        home_terminal: vals.homeTerminal || undefined,
+        main_office: vals.mainOffice || undefined,
       });
       setTrip(t);
+      setValues(valuesFromTrip(t));
+      setLitStop(null); setLitMin(null); setMapFocus(null);
       setActiveDay(0);
       setPhase("results");
       setRevealKey((k) => k + 1);
@@ -174,14 +185,10 @@ export default function App() {
     }
   }, [values]);
 
-  const loadSample = useCallback(async () => {
-    // sequential fill so the spine visibly populates
-    const fields = ["current", "pickup", "dropoff"];
-    for (const f of fields) {
-      await new Promise((r) => setTimeout(r, 90));
-      setValues((v) => ({ ...v, [f]: SAMPLE[f], cycle: SAMPLE.cycle }));
-    }
-    setTimeout(() => submit(SAMPLE), 240);
+  const loadSample = useCallback(() => {
+    const sample = { ...EMPTY, ...SAMPLE };
+    setValues(sample);
+    submit(sample);
   }, [submit]);
 
   /* ---------- map <-> log linking ---------- */
@@ -231,7 +238,7 @@ export default function App() {
   const strip = useMemo(() => {
     if (!trip || !geo) return null;
     return {
-      total: trip.route.legs.reduce((a, l) => a + l.miles, 0),
+      total: trip.summary.total_miles,
       dayRange: [geo.timeToMile(activeDay * 1440), geo.timeToMile((activeDay + 1) * 1440)],
     };
   }, [trip, geo, activeDay]);
@@ -254,22 +261,35 @@ export default function App() {
     setReplayTime(0);
   }, []);
 
-  const startReplay = useCallback(() => {
-    setReplaying(true);
-    setReplayTime(0);
-    const t0 = performance.now();
-    const DUR = 10000; // ~10s per day
+  const runReplay = useCallback(() => {
+    cancelAnimationFrame(replayRaf.current);
     const tick = (now) => {
-      const p = Math.min(1, (now - t0) / DUR);
-      setReplayTime(p * 1440);
-      if (p < 1) replayRaf.current = requestAnimationFrame(tick);
-      else setReplaying(false);
+      const minute = replayMinute(replayAnchor.current, now);
+      setReplayTime(minute);
+      if (minute < 1440) replayRaf.current = requestAnimationFrame(tick);
+      else setReplayPaused(true);
     };
     replayRaf.current = requestAnimationFrame(tick);
   }, []);
 
+  const startReplay = useCallback(() => {
+    setReplaying(true); setReplayPaused(false); setReplayTime(0);
+    replayAnchor.current = { minute: 0, at: performance.now() };
+    runReplay();
+  }, [runReplay]);
+
+  const pauseReplay = useCallback(() => {
+    cancelAnimationFrame(replayRaf.current);
+    if (replayPaused) {
+      replayAnchor.current = { minute: replayTime >= 1440 ? 0 : replayTime, at: performance.now() };
+      setReplayPaused(false); runReplay();
+    } else setReplayPaused(true);
+  }, [replayPaused, replayTime, runReplay]);
+
   const scrubReplay = useCallback((t) => {
-    setReplayTime(t);
+    cancelAnimationFrame(replayRaf.current);
+    setReplayPaused(true); setReplayTime(t);
+    replayAnchor.current = { minute: t, at: performance.now() };
   }, []);
 
   useEffect(() => () => cancelAnimationFrame(replayRaf.current), []);
@@ -284,6 +304,7 @@ export default function App() {
   return (
     <div className="app" data-phase={phase} data-wide={wide || undefined}
       data-busy={planning || undefined}>
+      {loadingTrip && <div className="restore-banner" role="status">Opening your saved trip…</div>}
       {planning && <div className="top-progress" role="progressbar" aria-label="Planning trip" />}
       {phase === "results" && trip && (
         <>
@@ -295,7 +316,7 @@ export default function App() {
             setErrors={setErrors}
             onSubmit={() => submit()}
             onSample={loadSample}
-            planning={planning}
+            planning={planning || loadingTrip}
             planStep={planStep}
             toast={toast}
             onRetry={() => submit()}
@@ -307,6 +328,7 @@ export default function App() {
       {/* ONE map instance lives across both phases — CSS morphs it */}
       <div className="stage">
         <div className="map-pane">
+          <Suspense fallback={<div className="map-loading" role="status">Loading route map…</div>}>
           <RouteMap
             route={trip?.route || null}
             stops={trip?.stops || []}
@@ -317,6 +339,8 @@ export default function App() {
             revealKey={revealKey}
             focus={mapFocus}
           />
+          </Suspense>
+          {trip && <div className="map-key"><span className="deadhead-key" /> To pickup <span className="loaded-key" /> Loaded route</div>}
           {phase === "results" && trip && strip && (
             <TripStrip
               stops={trip.stops}
@@ -332,8 +356,9 @@ export default function App() {
           )}
           {phase === "results" && replaying && (
             <div className="replay-bar">
-              <button type="button" className="mini-btn" onClick={stopReplay}
-                aria-label="Stop replay">■</button>
+              <button type="button" className="mini-btn" onClick={pauseReplay}
+                aria-label={replayPaused ? "Resume replay" : "Pause replay"}>{replayPaused ? "Play" : "Pause"}</button>
+              <button type="button" className="mini-btn" onClick={stopReplay} aria-label="Stop replay">Stop</button>
               <span className="rb-time">
                 Day {activeDay + 1} · {fmtClock(Math.floor(replayTime))}
               </span>
@@ -378,7 +403,7 @@ export default function App() {
           setErrors={setErrors}
           onSubmit={() => submit()}
           onSample={loadSample}
-          planning={planning}
+          planning={planning || loadingTrip}
           planStep={planStep}
           toast={toast}
           onRetry={() => submit()}

@@ -643,7 +643,7 @@ export default function LogSheet({
       )}
     </svg>
     {/* visually-hidden segment table for screen readers (PRD §11.7) */}
-    <table className="vh-only">
+    <div className="vh-only"><table>
       <caption>Duty status segments for {log.date}</caption>
       <thead>
         <tr><th>Start</th><th>End</th><th>Status</th><th>Location</th></tr>
@@ -656,12 +656,12 @@ export default function LogSheet({
               <td>{f(s.start_min)}</td>
               <td>{f(s.end_min)}</td>
               <td>{STATUS_NAMES[s.status] || s.status}</td>
-              <td>{s.city ? `${s.city}, ${s.state || ""}` : "—"}</td>
+              <td>{(() => { const r = log.remarks.find((r) => r.stop_id != null && r.stop_id === s.stop_id); return r ? [r.city, r.state].filter(Boolean).join(", ") : "—"; })()}</td>
             </tr>
           );
         })}
       </tbody>
-    </table>
+    </table></div>
     </>
   );
 }
