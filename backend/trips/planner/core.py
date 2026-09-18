@@ -10,8 +10,8 @@ Rules implemented (FMCSA Apr 2022 guide, per PRD §7):
   - 11h max driving inside the window
   - 30min break after 8 cumulative driving hours (any 30 consecutive
     non-driving minutes count: ON, OFF or SB, e.g. a 1h pickup)
-  - 70h on-duty (D+ON) in rolling 8 days; when the remaining cycle can't
-    cover the next on-duty block, a 34h OFF/SB restart resets it
+  - No driving beyond 70h on-duty (D+ON); non-driving work may continue.
+    A 34h OFF/SB restart restores driving availability.
   - Fuel: 30min ON at least once every 1,000 driving miles
   - Pickup/dropoff: 1:00 ON each; pre/post-trip: 0:15 ON each
 """
@@ -223,22 +223,21 @@ class _Planner:
             window_end = (self.window_start + LIMIT_WINDOW
                           if self.window_start is not None else None)
 
+            # A cycle restart also resets daily clocks; do not stack 10h + 34h.
+            if self.remaining_cycle < STEP:
+                self._restart_34()
+                continue
+
             # Hard drive-time limits -> 10h restart
             if (self.drive_in_window >= LIMIT_DRIVE
                     or (window_end is not None and self.t + STEP > window_end)):
                 self._rest_10()
                 continue
 
-            # Cycle exhausted -> 34h restart
-            if self.remaining_cycle < STEP:
-                self._restart_34()
-                continue
-
             slice_miles = STEP * speed
 
             # Fuel before exceeding 1,000 miles since last fuel
             if self.miles_since_fuel + slice_miles > FUEL_MILES:
-                self._ensure_cycle(FUEL_MIN)
                 self._fuel()
                 continue
 
@@ -268,19 +267,16 @@ class _Planner:
 
         self._drive_leg(0)
 
-        self._ensure_cycle(PICKUP_MIN)
         self._emit(STATUS_ON, PICKUP_MIN, "pickup", remark="Pickup / loading",
                    bracket=True, stop_type="pickup", label="Pickup / loading")
 
         if len(self.leg_miles) > 1:
             self._drive_leg(1)
 
-        self._ensure_cycle(DROPOFF_MIN)
         self._emit(STATUS_ON, DROPOFF_MIN, "dropoff",
                    remark="Dropoff / unloading", bracket=True,
                    stop_type="dropoff", label="Dropoff / unloading")
 
-        self._ensure_cycle(POST_TRIP_MIN)
         self._emit(STATUS_ON, POST_TRIP_MIN, "post_trip",
                    remark="Post-trip / TIV", bracket=True,
                    stop_type="post_trip", label="Post-trip / TIV")

@@ -373,6 +373,7 @@ export default function App() {
         </div>
         {phase === "results" && trip && (
           <LogBook
+            route={trip.route}
             logs={trip.logs}
             meta={trip.meta}
             stops={trip.stops}

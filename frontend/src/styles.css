@@ -1381,3 +1381,51 @@ input { font-family: inherit; }
 .logbook-head { padding-top:8px; }
 .sheet-help { margin-bottom:12px; }
 .ticket details:not([open]) .opt-grid { display:none; }
+
+/* Keep day selection independent of the actions: no squeezed or clipped tabs. */
+.logbook-head { display:grid; grid-template-columns:minmax(0, 1fr); gap:10px; padding:12px 20px; }
+.day-nav { width:100%; align-items:center; gap:8px; }
+.day-tabs { padding:2px; mask-image:none; -webkit-mask-image:none; gap:8px; }
+.day-tab { flex-shrink:0; border:1px solid var(--line-700); border-radius:8px; min-height:44px; letter-spacing:.04em; }
+.day-tab .dt-d { display:inline; }
+.nav-btn { min-width:44px; min-height:44px; border-color:var(--line-700); }
+.logbook-actions { width:100%; flex-wrap:wrap; gap:8px; padding:0; }
+.logbook-actions .mini-btn { flex:1; justify-content:center; min-height:44px; padding:8px; }
+.logbook-actions .mb-label { display:inline; font-size:11px; }
+.logbook-actions .zoom-toggle { display:inline-flex; }
+.paper-sheet, .paper-sheet:hover { transform:none; }
+.sheet-viewport.zoomed { overflow-x:auto; }
+.sheet-viewport.zoomed .sheet-stack { width:1280px; max-width:none; }
+.sheet-help { font-size:13px; line-height:1.6; }
+.trip-notes { margin:22px 0; padding:0 16px; border:1px solid var(--line-700); border-radius:10px; background:var(--night-900); font-size:14px; line-height:1.65; }
+.trip-notes summary { cursor:pointer; padding:14px 0; color:var(--fog-100); font-weight:600; }
+.trip-notes summary span { display:block; padding-left:16px; font-size:12px; color:var(--fog-500); font-weight:400; }
+.trip-notes ul { padding-left:20px; margin:0 0 16px; }
+.trip-notes li { margin:10px 0; color:var(--fog-300); }
+.trip-notes p { color:var(--fog-300); }
+.route-directions h3 { font-size:14px; display:flex; justify-content:space-between; color:var(--accent-soft); }
+.route-directions ol { padding-left:24px; }
+.route-directions li { padding:10px 4px; border-bottom:1px solid var(--line-700); }
+.route-directions li b { display:block; font:12px var(--mono); margin-top:4px; color:var(--fog-500); }
+@media(max-width:720px) {
+ .logbook-head { padding:12px; }
+ .logbook-actions { justify-content:flex-start; gap:6px; }
+ .logbook-actions .mini-btn { flex:1 1 70px; }
+ .trip-notes { padding:0 12px; }
+}
+@media print {
+ @page { size:landscape; margin:8mm; }
+ .trip-notes { display:none !important; }
+ .logbook-pane { container-type:normal; }
+ .paper-sheet { break-inside:avoid; page-break-after:always; width:245mm !important; max-width:100% !important; }
+ .paper-sheet:last-child { page-break-after:auto; }
+ .sheet-viewport.zoomed .sheet-stack { width:auto !important; }
+ .paper-sheet svg { width:100%; height:auto; display:block; }
+}
+
+.route-directions ol { list-style:decimal; }
+@media print {
+ .paper-sheet { background:#fff !important; }
+ .paper-sheet svg text { fill:#111; }
+ .paper-sheet svg line { stroke:#666; }
+}

@@ -184,7 +184,10 @@ def trip_create(request):
             else:
                 place = geocode.reverse(lnglat[1], lnglat[0])
         if place is None:
-            place = nearest_endpoint_city(s.route_mile)
+            # Never label a mid-route stop as a distant endpoint on lookup failure.
+            place = geocode.Place(lnglat[1], lnglat[0],
+                f"Unverified location ({lnglat[1]:.3f}, {lnglat[0]:.3f})",
+                "", "Location unavailable", {})
         s.city, s.state = place.city, place.state
         stops_out.append({
             "id": s.id, "type": s.type, "status": s.status,
@@ -241,19 +244,20 @@ def trip_create(request):
             "fuel_stops": sum(1 for s in plan.stops if s.type == "fuel"),
             "rests": sum(1 for s in plan.stops if s.type == "rest"),
             "restarts_34": plan.restarts_34,
-            "cycle_remaining_hours": round(plan.cycle_remaining_minutes / 60, 2),
+            "cycle_remaining_hours": round(max(0, plan.cycle_remaining_minutes) / 60, 2),
             "gauges": {
                 "drive_used_min": plan.drive_in_window_at_end,
                 "window_elapsed_min": window_elapsed,
                 "cycle_used_min": 70 * 60 - plan.cycle_remaining_minutes,
-                "cycle_remaining_min": plan.cycle_remaining_minutes,
+                "cycle_remaining_min": max(0, plan.cycle_remaining_minutes),
             },
         },
         "route": {
             "geometry": route.geometry,
             "legs": [
                 {"miles": round(l.miles, 1), "minutes": round(l.minutes, 1),
-                 "coord_start": l.coord_start, "coord_end": l.coord_end}
+                 "coord_start": l.coord_start, "coord_end": l.coord_end,
+                 "directions": l.directions}
                 for l in route.legs
             ],
             "points": {

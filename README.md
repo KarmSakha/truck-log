@@ -2,11 +2,9 @@
 
 **Live: https://hosdesk.karmx.dev**
 
-A night-dispatch trip planner that turns a truck driver's leg into a **legal
-FMCSA-style paper daily log**. Enter the truck's current location, the pickup,
+A night-dispatch trip planner that turns a truck driver's leg into a **FMCSA-style planned daily log**. Enter the truck's current location, the pickup,
 the dropoff, and how much of the 70-hour/8-day cycle is already burned — the
-app geocodes the points, routes the truck, inserts every regulatory stop a
-property-carrying driver needs, and draws one recognizable paper log sheet per
+app geocodes the points, routes the truck, inserts breaks, fuel and rest under the stated planning assumptions, and draws one recognizable paper log sheet per
 calendar day.
 
 This is a take-home prototype, **not a certified ELD**. It renders familiar
@@ -25,7 +23,7 @@ planning and explanation.
   - 14-hour elapsed driving window
   - 30-minute break after 8 hours of driving — any 30 consecutive
     non-driving minutes count (a 1-hour pickup or a 30-minute fuel stop)
-  - 70-hour/8-day cycle limit, with a 34-hour restart when the cycle is spent
+  - 70-hour/8-day cycle limit, with a 34-hour restart before further driving when the cycle is spent; unloading and other non-driving work can continue
   - Fuel stop every 1,000 route miles (30 min ON duty)
   - Pickup & dropoff: 1 hour ON duty each
   - Pre-trip & post-trip inspections: 15 min ON duty each
@@ -85,7 +83,7 @@ pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver        # http://127.0.0.1:8000
 
-# frontend (Node 20+)
+# frontend (Node 22+)
 cd frontend
 npm install
 npm run dev                       # http://localhost:5173
@@ -100,7 +98,7 @@ cd backend && source .venv/bin/activate
 python manage.py test trips
 ```
 
-33 backend tests cover the 11h/14h/30-min/70h/34h/fuel rules, multi-day splits,
+36 backend tests cover the 11h/14h/30-min/70h/34h/fuel rules, multi-day splits,
 per-day totals, and a golden Schneider-style fixture.
 
 ## Configuration
@@ -140,9 +138,9 @@ Frontend environment variables:
 
 - **Prior cycle hours are a lump.** The input is one number, not a per-day
   history, so the planner treats it conservatively: those hours never "age
-  off" during the generated trip. A 34-hour restart is only inserted when the
-  cycle is actually exhausted. Hours used are rounded *up* to the next 15
-  minutes, so 70 real hours are never exceeded.
+  off" during the generated trip. A 34-hour restart restores driving availability when the
+  cycle is exhausted. Non-driving work can continue beyond 70 hours. Hours used are rounded *up* to the next 15
+  minutes, so driving never continues beyond 70 on-duty hours.
 - **Home-terminal time.** Every sheet uses the driver's home-terminal time
   zone (default `America/Chicago`), matching the paper form's instruction.
 - **15-minute ink.** All status changes snap to the quarter-hour, like pen on
@@ -177,3 +175,12 @@ and recording link in the submission.
 
 Frontend regression checks: `cd frontend && npm test && npm run lint && npm run build`.
 Saved trips restore all optional fields. Replay supports pause, seek, and resume.
+
+Road-by-road directions are included for newly planned trips. Replan older saved
+trips to obtain directions. Routes use a general driving profile, not truck-specific
+clearance or weight restrictions. Fuel/rest markers are estimated route positions,
+not verified facilities. The driver is assumed fully rested at the start; supplied
+cycle hours do not describe the current shift. These assumptions are also visible
+in the logbook.
+
+A timed recording outline is available in [docs/demo-walkthrough.md](docs/demo-walkthrough.md).

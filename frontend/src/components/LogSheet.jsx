@@ -339,7 +339,7 @@ export default function LogSheet({
       </g>
       <FillLine x1={M} x2={660} y={192}
         label="TRUCK/TRACTOR AND TRAILER NUMBERS OR LICENSE PLATE(S)/STATE (SHOW EACH UNIT)"
-        value={meta && meta.tractor !== "N/A" ? `${meta.tractor} / ${meta.trailer}` : "N/A"} />
+        value={`${meta?.tractor || "N/A"} / ${meta?.trailer || "N/A"}`} />
 
       {/* ============ GRID ============ */}
       <g>
@@ -559,7 +559,7 @@ export default function LogSheet({
         <FillLine x1={M + 190} x2={640} y={664} label="DVL OR MANIFEST NO."
           value={meta?.manifest} />
         <FillLine x1={680} x2={W - M} y={664} label="SHIPPER &amp; COMMODITY"
-          value={meta && meta.shipper !== "N/A" ? `${meta.shipper} — ${meta.commodity}` : "N/A"} />
+          value={`${meta?.shipper || "N/A"} — ${meta?.commodity || "N/A"}`} />
       </g>
 
       {/* ============ RECAP ============ */}

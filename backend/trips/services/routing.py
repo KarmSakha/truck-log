@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 from django.conf import settings
@@ -17,6 +17,7 @@ class LegResult:
     minutes: float          # raw (unquantized) drive minutes
     coord_start: int        # index into the combined geometry
     coord_end: int
+    directions: list = field(default_factory=list)
 
 
 @dataclass
@@ -35,7 +36,7 @@ def fetch_route(points):
     """points: [(lat, lng), ...] for current -> pickup -> dropoff."""
     coords = ";".join(f"{lng},{lat}" for lat, lng in points)
     url = (f"{settings.OSRM_URL}/route/v1/driving/{coords}"
-           f"?overview=full&geometries=geojson&steps=false"
+           f"?overview=full&geometries=geojson&steps=true"
            f"&annotations=distance,duration")
     try:
         r = requests.get(url, timeout=30,
@@ -67,6 +68,7 @@ def fetch_route(points):
             minutes=osrm_leg["duration"] / 60.0,
             coord_start=split_indices[i],
             coord_end=split_indices[i + 1],
+            directions=[_direction(step) for step in osrm_leg.get("steps", [])],
         ))
 
     return RouteResult(
@@ -119,3 +121,31 @@ def position_at_mile(geometry, cum_miles, mile):
     f = 0.0 if span <= 0 else (mile - cum_miles[lo]) / span
     return [geometry[lo][0] + (geometry[hi][0] - geometry[lo][0]) * f,
             geometry[lo][1] + (geometry[hi][1] - geometry[lo][1]) * f]
+
+
+def _direction(step):
+    """Keep only display-safe navigation data from an OSRM maneuver."""
+    maneuver = step.get("maneuver", {})
+    kind = maneuver.get("type", "continue")
+    modifier = maneuver.get("modifier", "").replace("_", " ")
+    modifier = modifier.replace("slight ", "slightly ").replace("sharp ", "sharply ")
+    road = step.get("name") or step.get("ref") or "the road"
+    if modifier == "uturn":
+        instruction = f"Make a U-turn onto {road}"
+    elif kind == "depart":
+        instruction = f"Start on {road}"
+    elif kind == "arrive":
+        instruction = "Arrive at your destination"
+    elif kind in {"roundabout", "rotary", "roundabout turn"}:
+        exit_number = maneuver.get("exit")
+        instruction = (f"At the roundabout, take exit {exit_number} onto {road}"
+                       if exit_number else f"Follow the roundabout onto {road}")
+    elif kind == "new name":
+        instruction = f"Continue onto {road}"
+    else:
+        verb = {"turn": "Turn", "fork": "Keep", "merge": "Merge",
+                "on ramp": "Take the ramp", "off ramp": "Take the exit",
+                "end of road": "At the end of the road, turn"}.get(kind, "Continue")
+        instruction = f"{verb} {modifier} onto {road}".replace("  ", " ")
+    return {"instruction": instruction,
+            "miles": round(step.get("distance", 0) / METERS_PER_MILE, 2)}

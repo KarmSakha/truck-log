@@ -253,6 +253,23 @@ class FuelAndCycleTests(SimpleTestCase):
         logs = build_day_logs(plan, date(2026, 9, 19), 70 * 60)
         check_logs(self, logs)
 
+    def test_unloading_and_post_trip_do_not_require_cycle_restart(self):
+        plan = plan_trip([0, 50], [0, 60], cycle_used_hours=67.5)
+        self.assertEqual(plan.restarts_34, 0)
+        self.assertEqual(plan.days, 1)
+        self.assertEqual(next(e.start for e in plan.events if e.kind == "dropoff"), 495)
+        self.assertEqual(plan.cycle_remaining_minutes, -60)
+        check_no_violations(self, plan)
+
+    def test_loading_can_exhaust_cycle_but_next_drive_requires_restart(self):
+        plan = plan_trip([0, 50], [0, 60], cycle_used_hours=69.5)
+        pickup = next(e for e in plan.events if e.kind == "pickup")
+        restart = next(s for s in plan.stops if s.type == "restart_34")
+        drive = next(e for e in plan.events if e.status == STATUS_D)
+        self.assertEqual(restart.start, pickup.end)
+        self.assertEqual(drive.start, restart.end)
+        check_no_violations(self, plan)
+
     def test_ceil_quarter(self):
         self.assertEqual(ceil_quarter(0), 0)
         self.assertEqual(ceil_quarter(65.0 * 60), 3900)
@@ -273,7 +290,7 @@ class FuelAndCycleTests(SimpleTestCase):
         self.assertLessEqual(on_before, 70 * 60 - 65.1 * 60)
         check_no_violations(self, plan)
 
-    def test_cycle_never_exceeded_by_on_duty(self):
+    def test_no_driving_after_cycle_exhaustion(self):
         lm, lt = legs((200, 4 * 60), (900, 16 * 60))
         plan = plan_trip(lm, lt, cycle_used_hours=40)
         check_no_violations(self, plan)
@@ -285,7 +302,8 @@ class FuelAndCycleTests(SimpleTestCase):
                 continue
             if e.status in (STATUS_ON, STATUS_D):
                 win += e.duration
-                self.assertLessEqual(win, 70 * 60 + 1)
+                if e.status == STATUS_D:
+                    self.assertLessEqual(win, 70 * 60 + 1)
 
 
 class GoldenFixtureTest(SimpleTestCase):

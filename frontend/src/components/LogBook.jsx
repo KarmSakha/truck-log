@@ -85,7 +85,7 @@ function DayItinerary({ log, day, stops, litStop, onItemHover, onItemPick }) {
 }
 
 export default function LogBook({
-  logs, meta, stops, activeDay, onDayChange, highlightMin, onSegmentHover,
+  logs, meta, stops, route, activeDay, onDayChange, highlightMin, onSegmentHover,
   replaying, replayTime, onReplayStart, onReplayStop,
   litStop, onItemHover, onItemPick, wide, onToggleWide,
 }) {
@@ -236,7 +236,7 @@ export default function LogBook({
         <div className="day-overview"><div><span className="eyebrow">{fmtWeekday(log.date)}</span><h2>{log.from} <span>→</span> {log.to}</h2></div><span className="day-total">24h <span>accounted for</span></span></div>
         <p className="sheet-help">Read your duty changes below. Select a stop to locate it on the map.</p>
         <div className={`sheet-viewport ${zoomed ? "zoomed" : ""}`}>
-        {zoomed && <p className="zoom-hint" aria-hidden="true">Swipe sideways to read the whole sheet</p>}
+        {zoomed && <p className="zoom-hint" aria-hidden="true">Scroll sideways to read the whole sheet</p>}
         <div className="sheet-stack">
           {logs.length > 1 && <div className="peek-sheet" aria-hidden="true" />}
           {logs.map((l, i) => (
@@ -260,6 +260,17 @@ export default function LogBook({
         </div>
         </div>
 
+        <details className="trip-notes">
+          <summary>Planning assumptions <span>How this trip is calculated</span></summary>
+          <ul>
+            <li>You start with a fresh 11-hour driving allowance and 14-hour window, after at least 10 hours off duty.</li>
+            <li>Prior cycle hours stay counted until a 34-hour restart because a daily history was not supplied. Non-driving work can continue after the cycle is exhausted.</li>
+            <li>Times use {meta?.timezone || "your home-terminal time zone"} and a 15-minute planning grid. Pickup and unloading each take one hour.</li>
+            <li>Road directions use a general driving profile. Check truck restrictions, bridge clearances and access before driving.</li>
+            <li>Fuel and rest markers are estimated positions along the route, not verified parking or fueling facilities. This is a planned log, not a record of actual duty.</li>
+          </ul>
+        </details>
+
         <DayItinerary
           key={activeDay}
           log={log}
@@ -269,6 +280,16 @@ export default function LogBook({
           onItemHover={onItemHover}
           onItemPick={onItemPick}
         />
+        <details className="trip-notes route-directions">
+          <summary>Road-by-road directions <span>Current → pickup → dropoff</span></summary>
+          <p>Driving estimates exclude scheduled fuel, loading and rest stops. Follow the daily itinerary for your duty schedule.</p>
+          {route?.legs?.some((leg) => leg.directions?.length) ? route.legs.map((leg, i) => (
+            <section key={i} aria-label={i === 0 ? "Directions to pickup" : "Directions to dropoff"}>
+              <h3>{i === 0 ? "To pickup" : "To dropoff"} <span>{Math.round(leg.miles).toLocaleString()} mi</span></h3>
+              <ol>{leg.directions?.map((step, j) => <li key={j}><span>{step.instruction}</span><b>{step.miles < 0.1 ? "< 0.1" : step.miles.toFixed(1)} mi</b></li>)}</ol>
+            </section>
+          )) : <p>This saved trip predates road directions. Select Replan to generate an updated trip.</p>}
+        </details>
       </div>
 
       <div className="legend-strip" aria-label={`Duty totals for day ${activeDay + 1}`}>
