@@ -1429,3 +1429,10 @@ input { font-family: inherit; }
  .paper-sheet svg text { fill:#111; }
  .paper-sheet svg line { stroke:#666; }
 }
+
+/* Print containers must not carry screen padding onto a trailing page. */
+@media print {
+  html, body, #root, .app { height:auto !important; min-height:0 !important; background:#fff !important; }
+  .app, .stage, .logbook-pane, .logbook-scroll { display:block !important; margin:0 !important; padding:0 !important; min-height:0 !important; }
+  .paper-sheet .vh-only { display:none !important; }
+}
